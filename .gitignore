@@ -1,0 +1,27 @@
+# Dependencias y artefactos
+node_modules/
+dist/
+coverage/
+cdk.out/
+*.tsbuildinfo
+
+# Configuración privada
+.env
+.env.*
+!.env.example
+.aws/
+
+# Contexto local: nunca publicar
+/status/
+/roadmap*.md
+/context.md
+/.agents/
+/.codex/
+/.tmp/
+
+# Editor y sistema
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log

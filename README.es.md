@@ -121,9 +121,9 @@ Invoca el handler real con un evento de API Gateway v2 y datos ficticios, sin AW
 
 ## Despliegue
 
-El stack exige el parámetro `RuntimePermissionsBoundaryArn`: el ARN de una permissions boundary creada previamente, que se aplica a todos los roles del stack y que el stack no provisiona. Los roles de las Lambdas solo escriben en su log group y acceden a la tabla con las acciones mínimas. Ejemplo: `--parameters RuntimePermissionsBoundaryArn=arn:aws:iam::<cuenta>:policy/<boundary>`.
+El stack de la API no crea ni modifica IAM: los roles de Lambda, Scheduler y del pipeline los crea un stack de fundación aparte, bajo una permissions boundary creada por un administrador. Cuenta, región y nombres de recursos están fijos en `infra/delivery.ts`.
 
-El stack no se despliega desde este repositorio todavía: CI solo valida (lint, formato, tipos, tests, build y synth). Un despliegue requiere credenciales y cuenta/región elegidas por quien despliega, por ejemplo `npx cdk deploy --profile PERFIL` después de `npm run build`.
+El despliegue es manual (workflows `foundation` y `deploy`, OIDC de GitHub, change set con aprobación de entorno). Prerrequisitos y pasos en [DEPLOYMENT.es.md](DEPLOYMENT.es.md); CI solo valida (lint, formato, tipos, tests, build y ambos synth).
 
 ## Limitaciones actuales
 

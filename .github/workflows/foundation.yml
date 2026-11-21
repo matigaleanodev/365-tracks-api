@@ -1,0 +1,86 @@
+name: foundation
+
+# Manual. Crea o actualiza el bucket de assets y los roles de entrega. Corre en el entorno
+# `foundation`, que exige revisores. Requiere los prerrequisitos de administración (ver DEPLOYMENT.md).
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: tracks365-delivery
+  cancel-in-progress: false
+
+jobs:
+  foundation:
+    if: github.repository == 'matigaleanodev/365-tracks-api' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: foundation
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: us-east-1
+      AWS_EC2_METADATA_DISABLED: 'true'
+      ACCOUNT: '650387442642'
+      STACK: tracks365-foundation
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Sintetizar la fundación sin acceso a AWS
+        run: |
+          npm test -- test/infra/delivery.test.ts
+          npm run synth:foundation
+          test "$(wc -c < cdk.foundation.out/Tracks365Foundation.template.json)" -le 51200
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::650387442642:role/tracks365-foundation
+          aws-region: us-east-1
+          allowed-account-ids: '650387442642'
+          role-session-name: tracks365-foundation-${{ github.run_id }}
+      - name: Preparar y ejecutar el change set
+        run: |
+          set -euo pipefail
+          identity=$(aws sts get-caller-identity --output json)
+          test "$(jq -r .Account <<< "$identity")" = "$ACCOUNT"
+          [[ "$(jq -r .Arn <<< "$identity")" == arn:aws:sts::$ACCOUNT:assumed-role/tracks365-foundation/* ]]
+
+          if aws cloudformation describe-stacks --stack-name "$STACK" > prior.json 2> prior-error.txt; then
+            status=$(jq -r '.Stacks[0].StackStatus' prior.json)
+            case "$status" in CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE) ;; *) echo "Estado $status: revisar."; exit 1 ;; esac
+            kind=UPDATE
+          else
+            grep -q "Stack with id $STACK does not exist" prior-error.txt || { cat prior-error.txt; exit 1; }
+            kind=CREATE
+          fi
+
+          change_set="${STACK}-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          aws cloudformation create-change-set --stack-name "$STACK" --change-set-name "$change_set" \
+            --change-set-type "$kind" --template-body file://cdk.foundation.out/Tracks365Foundation.template.json \
+            --role-arn "arn:aws:iam::$ACCOUNT:role/tracks365-foundation-cloudformation" \
+            --capabilities CAPABILITY_NAMED_IAM > created.json
+          stack_arn=$(jq -r .StackId created.json)
+          changeset_arn=$(jq -r .Id created.json)
+          aws cloudformation wait change-set-create-complete --stack-name "$stack_arn" --change-set-name "$changeset_arn"
+          aws cloudformation describe-change-set --stack-name "$stack_arn" --change-set-name "$changeset_arn" > change-set.json
+
+          # Guardas: solo roles IAM y el bucket de assets; nunca reemplazos ni eliminaciones.
+          jq -e '.Status == "CREATE_COMPLETE" and .ExecutionStatus == "AVAILABLE" and (.Changes | length > 0)' change-set.json
+          jq -e 'all(.Changes[].ResourceChange; (.ResourceType | IN("AWS::IAM::Role","AWS::S3::Bucket","AWS::S3::BucketPolicy")) and .Action != "Remove" and (.Replacement // "False") == "False")' change-set.json
+          {
+            echo "### Change set \`$change_set\`"
+            jq -r '.Changes[].ResourceChange | "- \(.Action) \(.LogicalResourceId) (\(.ResourceType))"' change-set.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          aws cloudformation execute-change-set --stack-name "$stack_arn" --change-set-name "$changeset_arn" \
+            --client-request-token "github-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if [[ "$kind" == CREATE ]]; then waiter=stack-create-complete; else waiter=stack-update-complete; fi
+          aws cloudformation wait "$waiter" --stack-name "$stack_arn"
+          aws cloudformation describe-stacks --stack-name "$stack_arn" --query 'Stacks[0].StackStatus' --output text

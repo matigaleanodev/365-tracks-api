@@ -24,7 +24,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Setup Node
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -40,3 +40,5 @@ jobs:
         run: npm test
       - name: Build and synth
         run: npm run synth
+      - name: Synth foundation
+        run: npm run synth:foundation

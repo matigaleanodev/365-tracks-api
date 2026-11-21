@@ -11,14 +11,14 @@ Si existe un workspace con AGENTS.md en los directorios padre, leerlo explícita
 - src/api: handler Middy, contratos HTTP (contracts.ts), errores y paginación.
 - src/tracks: entidad DailyTrack, puerto TrackRepository y caso de uso generateDailyTrack.
 - src/music-selection y src/spotify: puertos sin implementar; la lógica de negocio no importa clientes de AWS ni de terceros.
-- infra: stack CDK independiente y agnóstico de cuenta y región; las rutas de API Gateway deben coincidir con las de src/api/routes.ts, sin comodines.
+- infra: stack de la API sin IAM propio (roles importados de la fundación, ver DEPLOYMENT.md); cuenta, región y nombres fijos en infra/delivery.ts; las rutas de API Gateway deben coincidir con las de src/api/routes.ts, sin comodines.
 - La fecha editorial es la fecha UTC; el proceso diario debe seguir siendo idempotente por fecha.
 - La API es pública y de solo lectura. Nunca exponer credenciales de Spotify ni de OpenAI al frontend.
 
 ## Desarrollo y verificación
 
 - Usar el Node de .nvmrc e instalar con npm ci --ignore-scripts.
-- npm run check ejecuta lint, formato, tipos, tests, build y synth sin lookups.
+- npm run check ejecuta lint, formato, tipos, tests, build y ambos synth sin lookups.
 - npm run invoke -- GET /api/tracks/today invoca el handler con fixtures locales.
 - Los imports relativos llevan extensión .ts (Node ejecuta TypeScript sin transpilar: sin enums ni parameter properties).
 

@@ -67,7 +67,12 @@ The `plan` job stops if the change set touches IAM or removes or replaces the ta
 
 ## Application configuration
 
-`PUBLISH_TIME_UTC`, `SCHEDULE_ENABLED`, `PLAYLIST_SYNC_TIME_UTC` and `PLAYLIST_SCHEDULE_ENABLED` are read at synth time (CDK context or environment variables). The workflow does not set them: with the defaults, **both schedules are disabled**. Enable each one only after its credentials exist and a manual run has been verified. The playlist time must be 12:00 UTC or later.
+`PUBLISH_TIME_UTC`, `SCHEDULE_ENABLED`, `PLAYLIST_SYNC_TIME_UTC` and `PLAYLIST_SCHEDULE_ENABLED` are read at synth time (CDK context, then environment variables, then defaults). The **deploy** workflow controls the two schedules with boolean inputs, both unchecked by default:
+
+- `schedule_enabled`: daily catalog replenishment (00:00 UTC).
+- `playlist_schedule_enabled`: yearly playlist sync (12:30 UTC).
+
+By default **both schedules are disabled**. Each deployment sets their state explicitly (the workflow passes them to CDK as context and ignores inherited `PUBLISH_TIME_UTC`, `SCHEDULE_ENABLED`, `PLAYLIST_SCHEDULE_ENABLED` and `PLAYLIST_SYNC_TIME_UTC`), so a later deployment with the inputs unchecked disables them again. The `plan` job synthesizes once and fails, before creating the change set, if the synthesized state differs from the inputs; the change set is then prepared from that same verified assembly. The run summary lists each schedule with its state and UTC time. Enable each one only after its credentials exist and a manual run has been verified. The playlist time must be 12:00 UTC or later.
 
 ### Credentials (Parameter Store)
 
@@ -93,6 +98,7 @@ aws --profile PERFIL_ADMIN --region us-east-1 ssm put-parameter --type SecureStr
 2. Store the client id and secret in Parameter Store as above.
 3. Run the one-time authorization from a trusted machine: `SPOTIFY_CLIENT_ID=... SPOTIFY_CLIENT_SECRET=... AWS_PROFILE=PERFIL_AUTORIZADO node scripts/spotify-authorize.ts --store`. It requests only `playlist-modify-public`, and stores the refresh token without printing it. Without `--store` it only validates the flow.
 4. In Development Mode the refresh token can expire (about six months) or be revoked; the sync then fails with `invalid_grant` and step 3 must be repeated.
+5. `AWS_PROFILE=PERFIL_AUTORIZADO node scripts/playlist.ts sync` is a dry run: it does not modify playlists or sync records, and only days that have ended in every time zone (from 12:00 UTC of D+1) are considered. With a stored playlist record for the year it reads the real playlist and reports what it would add; without a record it does not query Spotify and the result is an upper bound (when writing, an existing playlist with the same name is reused instead of duplicated). Its only possible write is saving to Parameter Store a refresh token that Spotify rotated (needs `ssm:PutParameter`), because discarding it could invalidate the authorization. If that save fails the run aborts (exit code 1). `--write` is the only way to create playlists or add tracks. If the script rotates and saves the token while a playlist Lambda is warm, that instance keeps the previous token until a cold start: do not run the script while the playlist Scheduler may be running.
 
 ### CORS
 

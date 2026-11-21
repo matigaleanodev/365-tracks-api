@@ -1,12 +1,19 @@
 // Sincronización manual de la playlist anual. Uso:
-//   AWS_PROFILE=<perfil> node scripts/playlist.ts sync            (simulación: no escribe nada)
+//   AWS_PROFILE=<perfil> node scripts/playlist.ts sync            (dry-run)
 //   AWS_PROFILE=<perfil> node scripts/playlist.ts sync --write    (crea/agrega en Spotify y registra)
-// Lee la tabla y las credenciales de Parameter Store. Por defecto es una simulación; escribir
-// exige --write explícito. Solo agrega canciones de días ya terminados en todas las zonas.
+// Lee la tabla (DynamoDB) y las credenciales (Parameter Store) reales. El dry-run (por defecto)
+// con registro guardado de la playlist del año lee la playlist real y reporta lo que agregaría;
+// sin registro no consulta Spotify y el resultado es una cota superior (al escribir se reutiliza
+// una playlist existente con el mismo nombre en vez de duplicarla). No modifica playlists ni
+// registros de sincronización ni toma el candado; su única escritura posible es guardar en
+// Parameter Store un refresh token que Spotify haya rotado (requiere ssm:PutParameter), porque
+// descartarlo podría invalidar la autorización. Escribir playlists y registros exige --write.
+// Solo se consideran días terminados en todas las zonas (desde las 12:00 UTC de D+1).
 import { parseArgs } from 'node:util';
 import { REGION, SSM_PREFIX, TABLE_NAME } from '../infra/delivery.ts';
 import { createPlaylistDependencies } from '../src/jobs/dependencies.ts';
-import { syncPlaylists } from '../src/playlist/sync.ts';
+import { syncPlaylists, type SyncReport } from '../src/playlist/sync.ts';
+import { SpotifyAuthError } from '../src/spotify/errors.ts';
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -41,8 +48,25 @@ const dependencies = await createPlaylistDependencies({
 });
 const dryRun = !values.write;
 console.log(
-  `target: ${TABLE_NAME} (${REGION}, profile ${profile}) — ${dryRun ? 'dry run, nothing is written' : 'WRITE'}`,
+  `target: ${TABLE_NAME} (${REGION}, profile ${profile}) — ${
+    dryRun
+      ? 'dry run: playlists and sync records are not modified (a rotated Spotify refresh token is still saved to Parameter Store)'
+      : 'WRITE'
+  }`,
 );
 
-const report = await syncPlaylists({ ...dependencies, now: () => clock ?? new Date() }, { dryRun });
+let report: SyncReport;
+try {
+  report = await syncPlaylists({ ...dependencies, now: () => clock ?? new Date() }, { dryRun });
+} catch (error) {
+  if (error instanceof SpotifyAuthError && error.failure === 'rotation_not_persisted') {
+    fail(
+      'Spotify rotated the refresh token but it could not be saved to Parameter Store; nothing else was written. ' +
+        'Check that the profile allows ssm:PutParameter on the refresh-token parameter and run again. ' +
+        'If the previous token no longer works (invalid_grant), repeat the initial authorization: ' +
+        'node scripts/spotify-authorize.ts --store',
+    );
+  }
+  throw error;
+}
 console.log(JSON.stringify(report, null, 2));

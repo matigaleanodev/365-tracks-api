@@ -1,3 +1,4 @@
+import { SpotifyAuthError } from '../spotify/errors.ts';
 import { AmbiguousSpotifyWriteError } from '../spotify/playlist-client.ts';
 import { syncPlaylists, type SyncDependencies } from '../playlist/sync.ts';
 import { createPlaylistDependencies } from './dependencies.ts';
@@ -42,6 +43,12 @@ export function createSyncPlaylistHandler(
         // Sin títulos ni cuerpos: el candado queda vigente hasta que venza.
         console.error(
           JSON.stringify({ event: 'playlist-sync-ambiguous-write', message: error.message }),
+        );
+      }
+      if (error instanceof SpotifyAuthError && error.failure === 'rotation_not_persisted') {
+        // Sin el token: el mensaje del error ya no lo incluye.
+        console.error(
+          JSON.stringify({ event: 'playlist-sync-rotation-not-persisted', message: error.message }),
         );
       }
       throw error;

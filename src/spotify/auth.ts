@@ -152,7 +152,10 @@ export function createRefreshTokenProvider({
   tokenUrl = SPOTIFY_TOKEN_URL,
 }: RefreshTokenProviderOptions): AccessTokenProvider {
   let currentRefreshToken = refreshToken;
+  // Spotify rotó el token y todavía no se pudo guardar: la instancia ya usa el nuevo.
+  let rotationPending = false;
   return cachedProvider(async () => {
+    let parsed: ReturnType<typeof parseTokenResponse>;
     try {
       const { json } = await requestJson(
         'Spotify token refresh',
@@ -171,14 +174,27 @@ export function createRefreshTokenProvider({
         policy,
         http,
       );
-      const parsed = parseTokenResponse(json);
-      if (parsed.refreshToken !== undefined && parsed.refreshToken !== currentRefreshToken) {
-        await onRefreshTokenRotated?.(parsed.refreshToken);
-        currentRefreshToken = parsed.refreshToken;
-      }
-      return parsed;
+      parsed = parseTokenResponse(json);
     } catch (error) {
       return toAuthError(error);
     }
+    if (parsed.refreshToken !== undefined && parsed.refreshToken !== currentRefreshToken) {
+      // El token anterior no se vuelve a usar aunque no se pueda guardar el nuevo.
+      currentRefreshToken = parsed.refreshToken;
+      rotationPending = true;
+    }
+    if (rotationPending && onRefreshTokenRotated) {
+      try {
+        await onRefreshTokenRotated(currentRefreshToken);
+        rotationPending = false;
+      } catch {
+        // Sin `cause` ni detalle: el error del store podría incluir el valor del token.
+        throw new SpotifyAuthError(
+          'rotation_not_persisted',
+          'Spotify rotated the refresh token but it could not be saved; aborting without using the access token',
+        );
+      }
+    }
+    return parsed;
   }, now);
 }

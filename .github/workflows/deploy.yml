@@ -1,0 +1,133 @@
+name: deploy
+
+# Manual y sin disparadores automáticos. Flujo: plan (entorno `plan`, sin aprobación) crea y revisa un
+# change set; execute (entorno `production`, con revisores) ejecuta ese mismo change set.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: tracks365-delivery
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  AWS_EC2_METADATA_DISABLED: 'true'
+  ACCOUNT: '650387442642'
+  STACK: tracks365-api
+
+jobs:
+  plan:
+    if: github.repository == 'matigaleanodev/365-tracks-api' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: plan
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      stack: ${{ steps.change-set.outputs.stack }}
+      changeset: ${{ steps.change-set.outputs.changeset }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Validar antes de tocar AWS
+        run: npm run lint && npm run typecheck && npm test && npm run build
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::650387442642:role/tracks365-prepare
+          aws-region: us-east-1
+          allowed-account-ids: '650387442642'
+          role-session-name: tracks365-plan-${{ github.run_id }}
+      - name: Preparar el change set
+        id: change-set
+        run: |
+          set -euo pipefail
+          identity=$(aws sts get-caller-identity --output json)
+          test "$(jq -r .Account <<< "$identity")" = "$ACCOUNT"
+          [[ "$(jq -r .Arn <<< "$identity")" == arn:aws:sts::$ACCOUNT:assumed-role/tracks365-prepare/* ]]
+
+          if aws cloudformation describe-stacks --stack-name "$STACK" > prior.json 2> prior-error.txt; then
+            status=$(jq -r '.Stacks[0].StackStatus' prior.json)
+            case "$status" in
+              CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE|REVIEW_IN_PROGRESS) ;;
+              *) echo "Estado $status: revisar manualmente antes de desplegar."; exit 1 ;;
+            esac
+          else
+            grep -q "Stack with id $STACK does not exist" prior-error.txt || { cat prior-error.txt; exit 1; }
+          fi
+
+          change_set="${STACK}-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          npx cdk deploy Tracks365ApiStack \
+            --role-arn "arn:aws:iam::$ACCOUNT:role/tracks365-cloudformation" \
+            --method prepare-change-set --change-set-name "$change_set" \
+            --require-approval never --no-notices
+          aws cloudformation describe-change-set --stack-name "$STACK" --change-set-name "$change_set" > change-set.json
+
+          # Guardas: el stack de la API nunca toca IAM ni reemplaza o elimina la tabla.
+          jq -e '.Status == "CREATE_COMPLETE" and .ExecutionStatus == "AVAILABLE"' change-set.json
+          if jq -e '[.Changes[].ResourceChange | select(.ResourceType | startswith("AWS::IAM::"))] | length > 0' change-set.json; then
+            echo "El change set modifica IAM; no se ejecuta."; exit 1
+          fi
+          if jq -e '[.Changes[].ResourceChange | select(.ResourceType == "AWS::DynamoDB::Table" and (.Action == "Remove" or .Replacement != "False" and .Replacement != null))] | length > 0' change-set.json; then
+            echo "El change set elimina o reemplaza la tabla; no se ejecuta."; exit 1
+          fi
+
+          echo "stack=$(jq -r .StackId change-set.json)" >> "$GITHUB_OUTPUT"
+          echo "changeset=$(jq -r .ChangeSetId change-set.json)" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Change set \`$change_set\`"
+            echo
+            echo "| Acción | Recurso | Tipo | Reemplazo |"
+            echo "| --- | --- | --- | --- |"
+            jq -r '.Changes[].ResourceChange | "| \(.Action) | \(.LogicalResourceId) | \(.ResourceType) | \(.Replacement // "-") |"' change-set.json
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: change-set-${{ github.run_id }}-${{ github.run_attempt }}
+          path: change-set.json
+          if-no-files-found: error
+          retention-days: 30
+
+  execute:
+    needs: plan
+    runs-on: ubuntu-24.04
+    environment: production
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      STACK_ARN: ${{ needs.plan.outputs.stack }}
+      CHANGESET_ARN: ${{ needs.plan.outputs.changeset }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::650387442642:role/tracks365-execute
+          aws-region: us-east-1
+          allowed-account-ids: '650387442642'
+          role-session-name: tracks365-execute-${{ github.run_id }}
+      - name: Ejecutar el change set revisado
+        run: |
+          set -euo pipefail
+          identity=$(aws sts get-caller-identity --output json)
+          test "$(jq -r .Account <<< "$identity")" = "$ACCOUNT"
+          [[ "$(jq -r .Arn <<< "$identity")" == arn:aws:sts::$ACCOUNT:assumed-role/tracks365-execute/* ]]
+          aws cloudformation describe-change-set --stack-name "$STACK_ARN" --change-set-name "$CHANGESET_ARN" > change-set.json
+          jq -e '.Status == "CREATE_COMPLETE" and .ExecutionStatus == "AVAILABLE"' change-set.json
+          status=$(aws cloudformation describe-stacks --stack-name "$STACK_ARN" --query 'Stacks[0].StackStatus' --output text)
+          if [[ "$status" == REVIEW_IN_PROGRESS ]]; then waiter=stack-create-complete; else waiter=stack-update-complete; fi
+          aws cloudformation execute-change-set --stack-name "$STACK_ARN" --change-set-name "$CHANGESET_ARN" \
+            --client-request-token "github-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          aws cloudformation wait "$waiter" --stack-name "$STACK_ARN"
+          aws cloudformation describe-stacks --stack-name "$STACK_ARN" \
+            --query 'Stacks[0].{Status:StackStatus,Outputs:Outputs}' > result.json
+          jq -e '.Status == "CREATE_COMPLETE" or .Status == "UPDATE_COMPLETE"' result.json
+          jq -r '.Outputs[] | "- \(.OutputKey): \(.OutputValue)"' result.json >> "$GITHUB_STEP_SUMMARY"

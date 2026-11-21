@@ -1,12 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import {
-  CfnOutput,
-  CfnParameter,
-  Duration,
-  RemovalPolicy,
-  Stack,
-  type StackProps,
-} from 'aws-cdk-lib';
+import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
@@ -16,6 +9,14 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import type { Construct } from 'constructs';
 import type { StackConfig } from './config.ts';
+import {
+  API_NAME,
+  FUNCTIONS,
+  roleArn,
+  SCHEDULE_NAME,
+  TABLE_NAME,
+  type RoleName,
+} from './delivery.ts';
 
 export interface LambdaCode {
   api: lambda.Code;
@@ -44,20 +45,10 @@ export class Tracks365ApiStack extends Stack {
       generateDailyTrack: builtCode('generate-daily-track'),
     };
 
-    // La boundary la crea y revisa un paso de administración previo; este stack solo la referencia.
-    // Se aplica a todos los roles del stack, incluidos los que se agreguen más adelante.
-    const boundaryArn = new CfnParameter(this, 'RuntimePermissionsBoundaryArn', {
-      type: 'String',
-      allowedPattern: '^arn:aws:iam::[0-9]{12}:policy/[A-Za-z0-9+=,.@_/-]+$',
-      description: 'ARN de la permissions boundary de runtime, creada previamente.',
-    });
-    iam.PermissionsBoundary.of(this).apply(
-      iam.ManagedPolicy.fromManagedPolicyArn(this, 'RuntimeBoundary', boundaryArn.valueAsString),
-    );
-
     // Un ítem por fecha: pk constante + sk = fecha. Permite GetItem por fecha, Query ordenado
     // para el historial y PutItem condicional (idempotencia). Escala de sobra: ~365 ítems/año.
     const table = new dynamodb.Table(this, 'TracksTable', {
+      tableName: TABLE_NAME,
       partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'date', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
@@ -76,28 +67,28 @@ export class Tracks365ApiStack extends Stack {
       },
     };
 
-    const apiLogs = this.logGroup('ApiLogs');
+    // Los roles los crea la fundación (con sus permisos mínimos y la boundary); este stack no
+    // crea ni modifica IAM: los importa como inmutables, así que ningún `grant*` agrega nada.
     const apiFunction = new lambda.Function(this, 'ApiFunction', {
       ...commonFunctionProps,
+      functionName: FUNCTIONS.http,
       code: code.api,
       timeout: Duration.seconds(10),
-      role: this.runtimeRole('ApiRole', apiLogs),
-      logGroup: apiLogs,
+      role: this.importRole('ApiRole', 'http'),
+      logGroup: this.logGroup('ApiLogs', FUNCTIONS.http),
     });
-    table.grant(apiFunction, 'dynamodb:GetItem', 'dynamodb:Query');
 
-    const generateLogs = this.logGroup('GenerateDailyTrackLogs');
     const generateFunction = new lambda.Function(this, 'GenerateDailyTrackFunction', {
       ...commonFunctionProps,
+      functionName: FUNCTIONS.generate,
       code: code.generateDailyTrack,
       timeout: Duration.seconds(60),
-      role: this.runtimeRole('GenerateDailyTrackRole', generateLogs),
-      logGroup: generateLogs,
+      role: this.importRole('GenerateDailyTrackRole', 'generate'),
+      logGroup: this.logGroup('GenerateDailyTrackLogs', FUNCTIONS.generate),
     });
-    table.grant(generateFunction, 'dynamodb:GetItem', 'dynamodb:PutItem');
 
     const httpApi = new apigwv2.HttpApi(this, 'HttpApi', {
-      apiName: '365-tracks-api',
+      apiName: API_NAME,
       createDefaultStage: false,
       ...(config.corsAllowedOrigins.length > 0 && {
         corsPreflight: {
@@ -119,13 +110,9 @@ export class Tracks365ApiStack extends Stack {
       throttle: THROTTLE,
     });
 
-    const schedulerRole = new iam.Role(this, 'SchedulerRole', {
-      assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com'),
-    });
-    generateFunction.grantInvoke(schedulerRole);
-
     const { hour, minute } = config.publishTime;
     new scheduler.CfnSchedule(this, 'DailyTrackSchedule', {
+      name: SCHEDULE_NAME,
       description: 'Dispara la generación de la canción diaria (hora UTC configurable).',
       scheduleExpression: `cron(${minute} ${hour} * * ? *)`,
       scheduleExpressionTimezone: 'UTC',
@@ -133,7 +120,7 @@ export class Tracks365ApiStack extends Stack {
       state: config.scheduleEnabled ? 'ENABLED' : 'DISABLED',
       target: {
         arn: generateFunction.functionArn,
-        roleArn: schedulerRole.roleArn,
+        roleArn: roleArn('scheduler'),
         input: JSON.stringify({ source: 'eventbridge-scheduler' }),
         // El proceso es idempotente: reintentar es seguro, pero se acota el default (24 h).
         retryPolicy: { maximumRetryAttempts: 2, maximumEventAgeInSeconds: 3600 },
@@ -144,17 +131,13 @@ export class Tracks365ApiStack extends Stack {
     new CfnOutput(this, 'TracksTableName', { value: table.tableName });
   }
 
-  /** Rol propio y mínimo: solo escribe en su log group (sin AWSLambdaBasicExecutionRole). */
-  private runtimeRole(id: string, logGroup: logs.LogGroup): iam.Role {
-    const role = new iam.Role(this, id, {
-      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
-    });
-    logGroup.grantWrite(role);
-    return role;
+  private importRole(id: string, name: RoleName): iam.IRole {
+    return iam.Role.fromRoleArn(this, id, roleArn(name), { mutable: false });
   }
 
-  private logGroup(id: string): logs.LogGroup {
+  private logGroup(id: string, functionName: string): logs.LogGroup {
     return new logs.LogGroup(this, id, {
+      logGroupName: `/aws/lambda/${functionName}`,
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: RemovalPolicy.DESTROY,
     });

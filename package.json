@@ -18,7 +18,9 @@
     "build": "node scripts/build.mjs",
     "invoke": "node scripts/invoke-local.ts",
     "synth": "npm run build && cdk synth --quiet --no-lookups",
-    "check": "npm run lint && npm run format:check && npm run typecheck && npm test && npm run synth"
+    "check": "npm run lint && npm run format:check && npm run typecheck && npm test && npm run synth && npm run synth:foundation",
+    "synth:foundation": "cdk synth --quiet --no-lookups --app \"node infra/foundation-app.ts\" --output cdk.foundation.out",
+    "admin:policies": "node scripts/generate-admin-policies.ts"
   },
   "dependencies": {
     "@middy/core": "7.9.2",

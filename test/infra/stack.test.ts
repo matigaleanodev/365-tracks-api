@@ -3,6 +3,14 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Code } from 'aws-cdk-lib/aws-lambda';
 import { describe, expect, it } from 'vitest';
 import type { StackConfig } from '../../infra/config.ts';
+import {
+  API_NAME,
+  FUNCTIONS,
+  roleArn,
+  rolePolicies,
+  SCHEDULE_NAME,
+  TABLE_NAME,
+} from '../../infra/delivery.ts';
 import { Tracks365ApiStack } from '../../infra/tracks-api-stack.ts';
 
 const baseConfig: StackConfig = {
@@ -21,6 +29,22 @@ function synth(config: StackConfig = baseConfig): Template {
 }
 
 describe('Tracks365ApiStack', () => {
+  it('crea la API con el nombre que la política IAM de CloudFormation permite', () => {
+    const apiNames = Object.values(synth().findResources('AWS::ApiGatewayV2::Api')).map(
+      (resource) => (resource.Properties as { Name: string }).Name,
+    );
+    const allowed = rolePolicies().cloudformation.flatMap((statement) => {
+      const condition = (statement as { Condition?: { StringEquals?: Record<string, string> } })
+        .Condition;
+      const name = condition?.StringEquals?.['apigateway:Request/ApiName'];
+      return name ? [name] : [];
+    });
+
+    expect(allowed).toHaveLength(1);
+    expect(apiNames).toEqual(allowed);
+    expect(apiNames).toEqual([API_NAME]);
+  });
+
   it('define la tabla con clave por fecha, on-demand, PITR y retención', () => {
     const template = synth();
     template.hasResource('AWS::DynamoDB::Table', {
@@ -87,62 +111,31 @@ describe('Tracks365ApiStack', () => {
     );
   });
 
-  it('otorga permisos mínimos sobre la tabla a cada Lambda', () => {
+  it('no crea ni modifica IAM: usa los roles precreados por la fundación', () => {
     const template = synth();
-    const actions = Object.values(template.findResources('AWS::IAM::Policy')).flatMap((policy) =>
-      policy.Properties.PolicyDocument.Statement.flatMap(
-        (statement: { Action: string | string[] }) => [statement.Action].flat(),
-      ),
+    for (const type of ['AWS::IAM::Role', 'AWS::IAM::Policy', 'AWS::IAM::ManagedPolicy']) {
+      template.resourceCountIs(type, 0);
+    }
+    const roles = Object.values(template.findResources('AWS::Lambda::Function')).map(
+      (fn) => fn.Properties.Role,
     );
-    expect(actions).toContain('dynamodb:PutItem');
-    expect(actions).toContain('dynamodb:Query');
-    expect(actions).not.toContain('dynamodb:*');
-    expect(actions).not.toContain('dynamodb:DeleteItem');
+    expect(roles.sort()).toEqual([roleArn('generate'), roleArn('http')]);
+    template.hasResourceProperties('AWS::Scheduler::Schedule', {
+      Name: SCHEDULE_NAME,
+      Target: Match.objectLike({ RoleArn: roleArn('scheduler') }),
+    });
   });
 
-  it('exige la boundary de runtime como parámetro y la aplica a todos los roles', () => {
+  it('usa nombres fijos que coinciden con los permisos de los roles', () => {
     const template = synth();
-    const parameter = template.toJSON().Parameters.RuntimePermissionsBoundaryArn;
-    expect(parameter.Type).toBe('String');
-    expect(parameter.Default).toBeUndefined();
-    expect(parameter.AllowedPattern).toContain('arn:aws:iam::');
-
-    const roles = Object.values(template.findResources('AWS::IAM::Role'));
-    expect(roles).toHaveLength(3);
-    for (const role of roles) {
-      expect(role.Properties.PermissionsBoundary).toEqual({ Ref: 'RuntimePermissionsBoundaryArn' });
-    }
-  });
-
-  it('los roles de Lambda no usan managed policies y escriben solo en su log group', () => {
-    const template = synth();
-    const lambdaRoles = Object.values(template.findResources('AWS::IAM::Role')).filter(
-      (role) =>
-        role.Properties.AssumeRolePolicyDocument.Statement[0].Principal.Service ===
-        'lambda.amazonaws.com',
-    );
-    expect(lambdaRoles).toHaveLength(2);
-    for (const role of lambdaRoles) {
-      expect(role.Properties.ManagedPolicyArns).toBeUndefined();
-    }
-
-    const statements = Object.values(template.findResources('AWS::IAM::Policy')).flatMap(
-      (policy) =>
-        policy.Properties.PolicyDocument.Statement as {
-          Action: string | string[];
-          Resource: unknown;
-        }[],
-    );
-    const logStatements = statements.filter((statement) =>
-      [statement.Action].flat().some((action) => action.startsWith('logs:')),
-    );
-    expect(logStatements).toHaveLength(2);
-    for (const statement of logStatements) {
-      expect([statement.Action].flat().sort()).toEqual([
-        'logs:CreateLogStream',
-        'logs:PutLogEvents',
-      ]);
-      expect(statement.Resource).not.toBe('*');
-    }
+    template.hasResourceProperties('AWS::DynamoDB::Table', { TableName: TABLE_NAME });
+    const names = Object.values(template.findResources('AWS::Lambda::Function'))
+      .map((fn) => fn.Properties.FunctionName)
+      .sort();
+    expect(names).toEqual([FUNCTIONS.generate, FUNCTIONS.http].sort());
+    const groups = Object.values(template.findResources('AWS::Logs::LogGroup'))
+      .map((group) => group.Properties.LogGroupName)
+      .sort();
+    expect(groups).toEqual([`/aws/lambda/${FUNCTIONS.generate}`, `/aws/lambda/${FUNCTIONS.http}`]);
   });
 });

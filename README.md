@@ -121,9 +121,9 @@ Invokes the real handler with an API Gateway v2 event and fictional data, withou
 
 ## Deployment
 
-The stack requires the `RuntimePermissionsBoundaryArn` parameter: the ARN of a previously created permissions boundary, applied to every role in the stack and not provisioned by it. Lambda roles only write to their own log group and use the minimum table actions. Example: `--parameters RuntimePermissionsBoundaryArn=arn:aws:iam::<account>:policy/<boundary>`.
+The API stack neither creates nor modifies IAM: Lambda and Scheduler roles and the pipeline roles are created by a separate foundation stack, under a permissions boundary created by an administrator. Account, region and resource names are fixed in `infra/delivery.ts`.
 
-The stack is not deployed from this repository yet: CI only validates (lint, format, types, tests, build and synth). A deployment needs credentials and an account/region chosen by whoever deploys, for example `npx cdk deploy --profile PROFILE` after `npm run build`.
+Deployment is manual (`foundation` and `deploy` workflows, GitHub OIDC, change set with environment approval). Prerequisites and steps are in [DEPLOYMENT.md](DEPLOYMENT.md); CI only validates (lint, format, types, tests, build and both synths).
 
 ## Current limitations
 

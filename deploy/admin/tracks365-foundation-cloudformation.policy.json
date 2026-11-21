@@ -1,0 +1,75 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:PutRolePermissionsBoundary"
+      ],
+      "Resource": [
+        "arn:aws:iam::650387442642:role/tracks365-http",
+        "arn:aws:iam::650387442642:role/tracks365-generate",
+        "arn:aws:iam::650387442642:role/tracks365-scheduler",
+        "arn:aws:iam::650387442642:role/tracks365-cloudformation",
+        "arn:aws:iam::650387442642:role/tracks365-prepare",
+        "arn:aws:iam::650387442642:role/tracks365-execute"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PermissionsBoundary": "arn:aws:iam::650387442642:policy/tracks365-ceiling"
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetRole",
+        "iam:DeleteRole",
+        "iam:PutRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:TagRole",
+        "iam:UntagRole"
+      ],
+      "Resource": [
+        "arn:aws:iam::650387442642:role/tracks365-http",
+        "arn:aws:iam::650387442642:role/tracks365-generate",
+        "arn:aws:iam::650387442642:role/tracks365-scheduler",
+        "arn:aws:iam::650387442642:role/tracks365-cloudformation",
+        "arn:aws:iam::650387442642:role/tracks365-prepare",
+        "arn:aws:iam::650387442642:role/tracks365-execute"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:DeleteBucket",
+        "s3:GetBucketPolicy",
+        "s3:PutBucketPolicy",
+        "s3:DeleteBucketPolicy",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:GetBucketOwnershipControls",
+        "s3:PutBucketOwnershipControls",
+        "s3:GetEncryptionConfiguration",
+        "s3:PutEncryptionConfiguration",
+        "s3:GetBucketVersioning",
+        "s3:PutBucketVersioning",
+        "s3:GetBucketTagging",
+        "s3:PutBucketTagging",
+        "s3:GetBucketLocation",
+        "s3:ListBucket",
+        "s3:GetLifecycleConfiguration",
+        "s3:PutLifecycleConfiguration"
+      ],
+      "Resource": [
+        "arn:aws:s3:::tracks365-assets-650387442642-us-east-1"
+      ]
+    }
+  ]
+}

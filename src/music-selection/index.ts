@@ -5,7 +5,8 @@ import { NotImplementedError } from '../shared/errors.ts';
 export interface TrackSelection {
   spotifyTrackId: string;
   selectionCriterion: string;
-  description?: string;
+  /** Obligatoria: sin descripción válida la canción no se considera preparada. */
+  description: string;
 }
 
 export interface MusicSelector {
@@ -15,3 +16,9 @@ export interface MusicSelector {
 export const notImplementedMusicSelector: MusicSelector = {
   select: () => Promise.reject(new NotImplementedError('Music selection')),
 };
+
+export {
+  createEditorialSelector,
+  SelectionFailedError,
+  type EditorialSelectorOptions,
+} from './selector.ts';

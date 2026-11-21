@@ -35,7 +35,8 @@
       "Effect": "Allow",
       "Action": [
         "dynamodb:GetItem",
-        "dynamodb:PutItem"
+        "dynamodb:PutItem",
+        "dynamodb:Query"
       ],
       "Resource": [
         "arn:aws:dynamodb:us-east-1:650387442642:table/tracks365-tracks"
@@ -44,10 +45,65 @@
     {
       "Effect": "Allow",
       "Action": [
+        "ssm:GetParameters"
+      ],
+      "Resource": [
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/client-id",
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/client-secret",
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/openai/api-key",
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/openai/model",
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/selection/criteria-weights"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": [
+        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-playlist:*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:Query"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:650387442642:table/tracks365-tracks"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameters"
+      ],
+      "Resource": [
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/client-id",
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/client-secret",
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/refresh-token"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:PutParameter"
+      ],
+      "Resource": [
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/refresh-token"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
         "lambda:InvokeFunction"
       ],
       "Resource": [
-        "arn:aws:lambda:us-east-1:650387442642:function:tracks365-api-generate"
+        "arn:aws:lambda:us-east-1:650387442642:function:tracks365-api-generate",
+        "arn:aws:lambda:us-east-1:650387442642:function:tracks365-api-playlist"
       ]
     },
     {
@@ -206,7 +262,8 @@
       ],
       "Resource": [
         "arn:aws:lambda:us-east-1:650387442642:function:tracks365-api-http",
-        "arn:aws:lambda:us-east-1:650387442642:function:tracks365-api-generate"
+        "arn:aws:lambda:us-east-1:650387442642:function:tracks365-api-generate",
+        "arn:aws:lambda:us-east-1:650387442642:function:tracks365-api-playlist"
       ]
     },
     {
@@ -216,7 +273,8 @@
       ],
       "Resource": [
         "arn:aws:iam::650387442642:role/tracks365-http",
-        "arn:aws:iam::650387442642:role/tracks365-generate"
+        "arn:aws:iam::650387442642:role/tracks365-generate",
+        "arn:aws:iam::650387442642:role/tracks365-playlist"
       ],
       "Condition": {
         "StringEquals": {
@@ -247,7 +305,8 @@
         "scheduler:DeleteSchedule"
       ],
       "Resource": [
-        "arn:aws:scheduler:us-east-1:650387442642:schedule/default/tracks365-daily-track"
+        "arn:aws:scheduler:us-east-1:650387442642:schedule/default/tracks365-daily-track",
+        "arn:aws:scheduler:us-east-1:650387442642:schedule/default/tracks365-playlist-sync"
       ]
     },
     {
@@ -266,7 +325,9 @@
         "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-http",
         "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-http:*",
         "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-generate",
-        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-generate:*"
+        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-generate:*",
+        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-playlist",
+        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-playlist:*"
       ]
     },
     {

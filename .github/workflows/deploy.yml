@@ -4,6 +4,12 @@ name: deploy
 # change set; execute (entorno `production`, con revisores) ejecuta ese mismo change set.
 on:
   workflow_dispatch:
+    inputs:
+      cors_allowed_origins:
+        description: 'Orígenes CORS permitidos, separados por coma (lista completa en cada despliegue; sin *). Vacío = sin CORS.'
+        required: false
+        default: 'http://localhost:4200'
+        type: string
 
 permissions: {}
 
@@ -48,6 +54,9 @@ jobs:
           role-session-name: tracks365-plan-${{ github.run_id }}
       - name: Preparar el change set
         id: change-set
+        env:
+          # Lo lee infra/config.ts al sintetizar; ahí se validan y se rechaza `*`.
+          CORS_ALLOWED_ORIGINS: ${{ inputs.cors_allowed_origins }}
         run: |
           set -euo pipefail
           identity=$(aws sts get-caller-identity --output json)
@@ -84,6 +93,8 @@ jobs:
           echo "changeset=$(jq -r .ChangeSetId change-set.json)" >> "$GITHUB_OUTPUT"
           {
             echo "### Change set \`$change_set\`"
+            echo
+            echo "CORS: \`${CORS_ALLOWED_ORIGINS:-(sin CORS)}\`"
             echo
             echo "| Acción | Recurso | Tipo | Reemplazo |"
             echo "| --- | --- | --- | --- |"

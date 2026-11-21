@@ -4,6 +4,7 @@ import type { SpotifyClient } from '../../src/spotify/index.ts';
 import { InMemoryTrackRepository } from '../../src/tracks/in-memory-repository.ts';
 import { generateDailyTrack } from '../../src/tracks/generate-daily-track.ts';
 import type { DailyTrack } from '../../src/tracks/types.ts';
+import { DESCRIPTION, fakeSpotify, spotifyTrack } from '../support/music.ts';
 
 const NOW = new Date('2027-01-01T00:05:00Z');
 
@@ -13,19 +14,12 @@ function setup(initial: DailyTrack[] = []) {
     select: vi.fn().mockResolvedValue({
       spotifyTrackId: 'abc',
       selectionCriterion: 'test-criterion',
-      description: 'A description',
+      description: DESCRIPTION,
     }),
   };
-  const spotify: SpotifyClient = {
-    getTrack: vi.fn().mockResolvedValue({
-      id: 'abc',
-      title: 'Title',
-      artist: 'Artist',
-      album: 'Album',
-      releaseYear: 1999,
-      url: 'https://open.spotify.com/track/abc',
-    }),
-  };
+  const spotify: SpotifyClient = fakeSpotify({
+    getTrack: vi.fn().mockResolvedValue(spotifyTrack('abc', { title: 'Title' })),
+  });
   return {
     repository,
     selector,
@@ -50,7 +44,8 @@ describe('generateDailyTrack', () => {
       spotifyTrackId: 'abc',
       spotifyUrl: 'https://open.spotify.com/track/abc',
       selectionCriterion: 'test-criterion',
-      description: 'A description',
+      description: DESCRIPTION,
+      spotifyArtistId: 'artist00000000000000AA',
       createdAt: '2027-01-01T00:05:00.000Z',
     });
     expect(await repository.getByDate('2027-01-01')).toEqual(result.track);

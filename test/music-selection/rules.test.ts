@@ -95,12 +95,30 @@ describe('criterios editoriales', () => {
     expect(rankCriteria([], weights)).not.toContain('recent-release');
   });
 
+  it('music-anniversary está deshabilitado y el resto se redistribuye', () => {
+    expect(DEFAULT_CRITERIA_WEIGHTS['music-anniversary']).toBe(0);
+    const history: { selectionCriterion: string }[] = [];
+    for (let day = 0; day < 365; day += 1) {
+      const [next] = rankCriteria(history);
+      history.push({ selectionCriterion: next as string });
+    }
+    expect(history.some((h) => h.selectionCriterion === 'music-anniversary')).toBe(false);
+    expect(() =>
+      parseCriteriaWeights(JSON.stringify({ ...DEFAULT_CRITERIA_WEIGHTS, 'music-anniversary': 1 })),
+    ).toThrow(/disabled/);
+  });
+
+  it('rechaza pesos cuya suma desborda', () => {
+    const huge = { ...DEFAULT_CRITERIA_WEIGHTS, classic: 1e308, 'hidden-gem': 1e308 };
+    expect(() => parseCriteriaWeights(JSON.stringify(huge))).toThrow(/too large/);
+  });
+
   it('parseCriteriaWeights normaliza y valida', () => {
     const doubled = Object.fromEntries(
       Object.entries(DEFAULT_CRITERIA_WEIGHTS).map(([k, v]) => [k, v * 10]),
     );
     const parsed = parseCriteriaWeights(JSON.stringify(doubled));
-    expect(parsed.classic).toBeCloseTo(0.2);
+    expect(parsed.classic).toBeCloseTo(0.25);
     expect(parseCriteriaWeights(undefined)).toEqual(DEFAULT_CRITERIA_WEIGHTS);
     expect(() => parseCriteriaWeights('no json')).toThrow(/JSON object/);
     expect(() => parseCriteriaWeights('[]')).toThrow(/JSON object/);

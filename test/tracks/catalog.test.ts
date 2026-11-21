@@ -11,7 +11,13 @@ import {
 import { InMemoryTrackRepository } from '../../src/tracks/in-memory-repository.ts';
 import type { TrackRepository } from '../../src/tracks/repository.ts';
 import type { DailyTrack } from '../../src/tracks/types.ts';
-import { DESCRIPTION, fakeSpotify, preparedTrack, spotifyTrack } from '../support/music.ts';
+import {
+  DESCRIPTION,
+  fakeSpotify,
+  ownArtist,
+  preparedTrack,
+  spotifyTrack,
+} from '../support/music.ts';
 
 const PRE_LAUNCH = new Date('2026-11-21T13:00:00Z');
 
@@ -35,7 +41,9 @@ function fakes(now: Date) {
     }),
   };
   const spotify: SpotifyClient = fakeSpotify({
-    getTrack: vi.fn((trackId: string) => Promise.resolve(spotifyTrack(trackId))),
+    getTrack: vi.fn((trackId: string) =>
+      Promise.resolve(spotifyTrack(trackId, ownArtist(trackId))),
+    ),
   });
   const repository = new InMemoryTrackRepository();
   return { repository, selector, spotify, now: () => now };

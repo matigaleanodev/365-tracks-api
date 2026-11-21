@@ -11,7 +11,7 @@ import {
   PLAYLIST_SCOPES,
 } from '../../src/spotify/authorization.ts';
 import { SpotifyAuthError } from '../../src/spotify/errors.ts';
-import type { HttpPolicy } from '../../src/shared/resilient-fetch.ts';
+import { HttpError, type HttpPolicy } from '../../src/shared/resilient-fetch.ts';
 
 const policy: HttpPolicy = {
   timeoutMs: 1000,
@@ -109,6 +109,23 @@ describe('client credentials', () => {
     });
   });
 
+  it.each([501, 507, 511])(
+    'un %i del endpoint de token → unavailable, no invalid_client',
+    async (status) => {
+      const fetchMock = fetchOf([token({ error: 'server' }, status)]);
+      const provider = createClientCredentialsProvider({
+        clientId: 'id',
+        clientSecret: 's',
+        policy,
+        http: http(fetchMock),
+      });
+      await expect(provider.getAccessToken()).rejects.toMatchObject({
+        name: 'SpotifyAuthError',
+        failure: 'unavailable',
+      });
+    },
+  );
+
   it('una respuesta sin token → unavailable', async () => {
     const fetchMock = fetchOf([token({ nope: true })]);
     const provider = createClientCredentialsProvider({
@@ -118,6 +135,22 @@ describe('client credentials', () => {
       http: http(fetchMock),
     });
     await expect(provider.getAccessToken()).rejects.toMatchObject({ failure: 'unavailable' });
+  });
+});
+
+describe('refresh token del dueño: 5xx', () => {
+  it('un 507 al renovar → unavailable y no se guarda nada', async () => {
+    const onRotated = vi.fn(() => Promise.resolve());
+    const provider = createRefreshTokenProvider({
+      clientId: 'id',
+      clientSecret: 's',
+      refreshToken: 'R1',
+      onRefreshTokenRotated: onRotated,
+      policy,
+      http: http(fetchOf([token({}, 507)])),
+    });
+    await expect(provider.getAccessToken()).rejects.toMatchObject({ failure: 'unavailable' });
+    expect(onRotated).not.toHaveBeenCalled();
   });
 });
 
@@ -249,4 +282,20 @@ describe('autorización inicial del dueño', () => {
       exchangeAuthorizationCode({ ...base, http: http(fetchOf([token({ access_token: 'A' })])) }),
     ).rejects.toMatchObject({ failure: 'unavailable' });
   });
+
+  it.each([501, 507])(
+    'un %i al canjear el código se propaga como error HTTP del servidor, nunca como invalid_grant',
+    async (status) => {
+      const error = await exchangeAuthorizationCode({
+        clientId: 'id',
+        clientSecret: 's',
+        code: 'C',
+        redirectUri: 'http://127.0.0.1:8888/callback',
+        http: http(fetchOf([token({ error: 'server' }, status)])),
+      }).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(HttpError);
+      expect(error).toMatchObject({ kind: 'server-error', status });
+      expect(error).not.toBeInstanceOf(SpotifyAuthError);
+    },
+  );
 });

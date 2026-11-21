@@ -94,7 +94,7 @@ export function createEditorialSelector({
         // Primero lo que no cuesta una llamada a Spotify.
         if (
           findDescriptionIssues(proposal.description, {
-            allowedYears: [proposal.releaseYear],
+            forbidDigits: true,
             forbidMonths: true,
           }).length > 0
         ) {
@@ -105,24 +105,12 @@ export function createEditorialSelector({
           title: proposal.title,
           artist: proposal.artist,
         });
-        const match = matchProposal(results, proposal, {
-          editorialDate: date,
-          requireAnniversary: criterion === 'music-anniversary',
-        });
+        const match = matchProposal(results, proposal);
         if (match.status === 'rejected') return discard(match.reason);
 
         const violation = findViolation(match.track, date, history, artistCooldownDays);
         if (violation !== null) return discard(violation);
 
-        // El año que se menciona debe ser el verificado en Spotify, no solo el que dijo el modelo.
-        if (
-          findDescriptionIssues(proposal.description, {
-            allowedYears: [match.track.releaseYear],
-            forbidMonths: true,
-          }).length > 0
-        ) {
-          return discard('invalid-description');
-        }
         return {
           spotifyTrackId: match.track.id,
           selectionCriterion: criterion,

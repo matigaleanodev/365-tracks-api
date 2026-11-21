@@ -10,14 +10,22 @@ export const EDITORIAL_CRITERIA = [
 export type EditorialCriterion = (typeof EDITORIAL_CRITERIA)[number];
 export type CriteriaWeights = Record<EditorialCriterion, number>;
 
+/**
+ * Criterios que no se pueden usar automáticamente. `music-anniversary` queda deshabilitado: la
+ * fecha de un álbum en Spotify no prueba la fecha original de la canción y no hay una fuente
+ * independiente integrada para verificarla. Se conserva el nombre en el tipo porque puede
+ * existir en registros ya guardados. Para rehabilitarlo hace falta una fuente verificable.
+ */
+export const DISABLED_CRITERIA: readonly EditorialCriterion[] = ['music-anniversary'];
+
 /** Distribución editorial inicial. Son objetivos de diversidad del catálogo, no probabilidades. */
 export const DEFAULT_CRITERIA_WEIGHTS: CriteriaWeights = {
-  classic: 0.2,
-  'hidden-gem': 0.25,
-  'music-anniversary': 0.2,
-  'genre-exploration': 0.15,
-  'recent-release': 0.1,
-  'cultural-date': 0.1,
+  classic: 0.25,
+  'hidden-gem': 0.3125,
+  'music-anniversary': 0,
+  'genre-exploration': 0.1875,
+  'recent-release': 0.125,
+  'cultural-date': 0.125,
 };
 
 /** Instrucción editorial de cada criterio. Es lo único del criterio que recibe el modelo. */
@@ -27,7 +35,7 @@ export const CRITERION_BRIEF: Record<EditorialCriterion, string> = {
   'hidden-gem':
     'A lesser-known song of real quality: an album track, a B-side or a song by an artist with a small audience. Do not choose the best-known hit of the artist.',
   'music-anniversary':
-    'A song whose original release date falls on exactly this calendar day (same month and day) in a past year. Propose it only if you are certain of the exact original release date and report it in releaseDate. If you are not certain, propose a different song that you are certain about.',
+    'Disabled: the original release date cannot be verified independently, so this criterion is never requested.',
   'genre-exploration':
     'A representative song from a genre or scene that listeners may not explore by default. It must be a good entry point to that style, not a niche curiosity.',
   'recent-release':
@@ -65,8 +73,14 @@ export function parseCriteriaWeights(raw: string | undefined): CriteriaWeights {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
       throw new Error(`Criteria weight "${criterion}" must be a non-negative number`);
     }
+    if (value > 0 && DISABLED_CRITERIA.includes(criterion)) {
+      throw new Error(`Criteria weight "${criterion}" must be 0: the criterion is disabled`);
+    }
     weights[criterion] = value;
     total += value;
+  }
+  if (!Number.isFinite(total)) {
+    throw new Error('Criteria weights are too large');
   }
   if (total <= 0) {
     throw new Error('Criteria weights must have at least one positive weight');
@@ -94,7 +108,9 @@ export function rankCriteria(
   const deficit = (criterion: EditorialCriterion) =>
     weights[criterion] * (total + 1) - (counts.get(criterion) ?? 0);
 
-  return EDITORIAL_CRITERIA.filter((criterion) => weights[criterion] > 0).sort(
+  return EDITORIAL_CRITERIA.filter(
+    (criterion) => weights[criterion] > 0 && !DISABLED_CRITERIA.includes(criterion),
+  ).sort(
     (a, b) =>
       deficit(b) - deficit(a) ||
       weights[b] - weights[a] ||

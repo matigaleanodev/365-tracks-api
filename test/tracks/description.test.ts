@@ -29,6 +29,20 @@ describe('findDescriptionIssues', () => {
     ]);
   });
 
+  it('forbidDigits descarta fechas numéricas, años abreviados y de reedición', () => {
+    for (const claim of [
+      'El tema se estrenó el 13/07/91 durante una emisión radial.',
+      'Salió en el 91 y sigue vigente.',
+      'La reedición de 2015 lo volvió a poner en circulación.',
+      'Fue número 1 durante semanas.',
+    ]) {
+      expect(findDescriptionIssues(`${DESCRIPTION} ${claim}`, { forbidDigits: true })).toHaveLength(
+        1,
+      );
+    }
+    expect(findDescriptionIssues(DESCRIPTION, { forbidDigits: true })).toEqual([]);
+  });
+
   it('los meses se rechazan solo cuando se pide (afirmaciones de fecha sin verificar)', () => {
     const withMonth = `${DESCRIPTION} Se publicó en octubre.`;
     expect(findDescriptionIssues(withMonth)).toEqual([]);

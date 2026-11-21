@@ -2,15 +2,23 @@ import type { IsoDate } from '../shared/dates.ts';
 import { requestJson, type HttpDependencies, type HttpPolicy } from '../shared/resilient-fetch.ts';
 import { CRITERION_BRIEF, type EditorialCriterion } from './criteria.ts';
 import type { DiversityTargets } from './diversity.ts';
+import {
+  composeDescription,
+  MAX_TRAITS,
+  MIN_TRAITS,
+  reasonIdsFor,
+  TRAIT_IDS,
+} from './editorial-vocabulary.ts';
 
 export interface SongProposal {
   title: string;
   artist: string;
   /** Año de lanzamiento original según el modelo; se contrasta con el catálogo real. */
   releaseYear: number;
-  /** Fecha completa afirmada por el modelo; solo para efemérides, se verifica contra Spotify. */
-  releaseDate: string | null;
-  /** Explicación breve, escrita sin ningún dato de Spotify. */
+  /**
+   * Compuesta localmente a partir de identificadores del vocabulario cerrado: el texto libre del
+   * modelo nunca llega aquí.
+   */
   description: string;
 }
 
@@ -50,30 +58,39 @@ export const OPENAI_HTTP_POLICY: HttpPolicy = {
   maxRetryAfterMs: 15_000,
 };
 
-const RESPONSE_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['candidates'],
-  properties: {
-    candidates: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['title', 'artist', 'releaseYear', 'releaseDate', 'description'],
-        properties: {
-          title: { type: 'string' },
-          artist: { type: 'string' },
-          releaseYear: { type: 'integer' },
-          releaseDate: { type: ['string', 'null'] },
-          description: { type: 'string' },
+/**
+ * Esquema estricto por criterio: el modelo no escribe texto libre de la descripción, solo elige
+ * un motivo y entre 2 y 3 rasgos de listas cerradas (la cantidad y la unicidad se validan
+ * localmente en `parseProposals`).
+ */
+export function buildResponseSchema(criterion: EditorialCriterion) {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['candidates'],
+    properties: {
+      candidates: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['title', 'artist', 'releaseYear', 'reason', 'traits'],
+          properties: {
+            title: { type: 'string' },
+            artist: { type: 'string' },
+            releaseYear: { type: 'integer' },
+            reason: { type: 'string', enum: reasonIdsFor(criterion) },
+            traits: { type: 'array', items: { type: 'string', enum: [...TRAIT_IDS] } },
+          },
         },
       },
     },
-  },
-} as const;
+  } as const;
+}
 
-export function buildInstructions(language: string): string {
+const CANDIDATE_KEYS = ['title', 'artist', 'releaseYear', 'reason', 'traits'];
+
+export function buildInstructions(): string {
   return [
     'You are the music editor of "365 Tracks", a public site that publishes one song per day, the same for everyone.',
     'You propose candidate songs from your own musical knowledge. You have no access to any streaming service or catalog data, and none is provided: never refer to one.',
@@ -83,9 +100,7 @@ export function buildInstructions(language: string): string {
     '- Follow the editorial criterion. The soft targets (decade, region, genre) guide variety; when they conflict with the criterion, the criterion wins.',
     '- Do not favour the most popular songs by default. Mix well-known songs and less obvious discoveries as the criterion asks.',
     '- Propose different artists across candidates, and do not repeat any song listed in "alreadyConsidered".',
-    `- Write each description in ${language}: one paragraph of one or two sentences explaining why this song was chosen, specific to the song.`,
-    "- A description must not contain quotations, lyrics, anecdotes, rankings, superlatives, promotional language, links, or the name of any month. Do not state a year unless it is the song's original release year and you are certain.",
-    '- releaseDate is the exact original release date (YYYY-MM-DD) and is required only for the "music-anniversary" criterion; otherwise it must be null.',
+    `- You do not write any description. For each candidate choose exactly one "reason" identifier that fits the criterion and between ${MIN_TRAITS} and ${MAX_TRAITS} different "traits" identifiers that truthfully describe how that specific song sounds. Use only the identifiers allowed by the response schema.`,
   ].join('\n');
 }
 
@@ -122,8 +137,12 @@ export function extractOutputText(json: unknown): string {
   throw new ProposalResponseError('no output text');
 }
 
-/** Valida la forma de los candidatos. Descarta los inválidos; falla si no queda ninguno. */
-export function parseProposals(text: string): SongProposal[] {
+/**
+ * Valida los candidatos. Descarta los inválidos (campos extra, identificadores desconocidos,
+ * rasgos repetidos o en cantidad incorrecta); falla si no queda ninguno. La descripción se
+ * compone localmente: cualquier texto libre del modelo se descarta con el candidato.
+ */
+export function parseProposals(text: string, criterion: EditorialCriterion): SongProposal[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -135,31 +154,24 @@ export function parseProposals(text: string): SongProposal[] {
 
   const proposals = candidates.flatMap((candidate): SongProposal[] => {
     if (!isRecord(candidate)) return [];
-    const { title, artist, releaseYear, releaseDate, description } = candidate;
-    const validDate =
-      releaseDate === null ||
-      (typeof releaseDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(releaseDate));
+    const keys = Object.keys(candidate);
+    if (keys.length !== CANDIDATE_KEYS.length || !CANDIDATE_KEYS.every((k) => keys.includes(k))) {
+      return [];
+    }
+    const { title, artist, releaseYear, reason, traits } = candidate;
     if (
       typeof title !== 'string' ||
       title.trim() === '' ||
       typeof artist !== 'string' ||
       artist.trim() === '' ||
       typeof releaseYear !== 'number' ||
-      !Number.isInteger(releaseYear) ||
-      !validDate ||
-      typeof description !== 'string'
+      !Number.isInteger(releaseYear)
     ) {
       return [];
     }
-    return [
-      {
-        title: title.trim(),
-        artist: artist.trim(),
-        releaseYear,
-        releaseDate: releaseDate as string | null,
-        description: description.trim(),
-      },
-    ];
+    const description = composeDescription(criterion, reason, traits);
+    if (description === null) return [];
+    return [{ title: title.trim(), artist: artist.trim(), releaseYear, description }];
   });
   if (proposals.length === 0) throw new ProposalResponseError('no valid candidates');
   return proposals;
@@ -169,8 +181,6 @@ export interface OpenAiProposerOptions {
   apiKey: string;
   /** Modelo configurado en el despliegue (Parameter Store): no se asume ninguno por defecto. */
   model: string;
-  /** Idioma de las descripciones. */
-  language?: string;
   policy?: HttpPolicy;
   http?: HttpDependencies;
   url?: string;
@@ -179,7 +189,6 @@ export interface OpenAiProposerOptions {
 export function createOpenAiProposer({
   apiKey,
   model,
-  language = 'Spanish',
   policy = OPENAI_HTTP_POLICY,
   http = {},
   url = OPENAI_RESPONSES_URL,
@@ -197,7 +206,7 @@ export function createOpenAiProposer({
             // No se conservan en OpenAI las propuestas editoriales.
             store: false,
             input: [
-              { role: 'system', content: buildInstructions(language) },
+              { role: 'system', content: buildInstructions() },
               { role: 'user', content: buildRequestInput(request) },
             ],
             text: {
@@ -205,7 +214,7 @@ export function createOpenAiProposer({
                 type: 'json_schema',
                 name: 'song_candidates',
                 strict: true,
-                schema: RESPONSE_SCHEMA,
+                schema: buildResponseSchema(request.criterion),
               },
             },
           }),
@@ -213,7 +222,7 @@ export function createOpenAiProposer({
         policy,
         http,
       );
-      return parseProposals(extractOutputText(json));
+      return parseProposals(extractOutputText(json), request.criterion);
     },
   };
 }

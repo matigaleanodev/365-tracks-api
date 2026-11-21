@@ -9,8 +9,10 @@ import type { ErrorResponse, TrackListResponse, TrackResponse } from '../../src/
 import { encodeCursor } from '../../src/api/pagination.ts';
 import type { TrackRepository } from '../../src/tracks/repository.ts';
 import type { DailyTrack } from '../../src/tracks/types.ts';
+import { getCatalogStatus } from '../../src/tracks/catalog.ts';
 import { buildDevFixtures } from '../../src/tracks/dev-fixtures.ts';
 import { InMemoryTrackRepository } from '../../src/tracks/in-memory-repository.ts';
+import { DESCRIPTION } from '../support/music.ts';
 
 const NOW = new Date('2027-01-10T12:00:00Z');
 const context = { getRemainingTimeInMillis: () => 30_000 } as unknown as Context;
@@ -78,7 +80,7 @@ describe('GET /api/tracks/:date', () => {
   it('omite los campos opcionales ausentes en lugar de enviarlos vacíos', async () => {
     const { body } = await call(withFixtures(), event('/api/tracks/2027-01-09'));
     expect((body as TrackResponse).data).not.toHaveProperty('coverUrl');
-    expect((body as TrackResponse).data).not.toHaveProperty('description');
+    expect((body as TrackResponse).data).toHaveProperty('description');
   });
 
   it('responde 400 INVALID_DATE ante una fecha inválida', async () => {
@@ -180,6 +182,7 @@ describe('publicaciones futuras y previas al lanzamiento', () => {
     spotifyTrackId: 'abcdefghijklmnopqrstuv',
     spotifyUrl: 'https://open.spotify.com/track/abcdefghijklmnopqrstuv',
     selectionCriterion: 'test',
+    description: DESCRIPTION,
     createdAt: '2026-12-01T00:00:00.000Z',
   });
   const dates = (body: unknown) => (body as TrackListResponse).data.map((item) => item.date);
@@ -286,6 +289,7 @@ describe('publicación por zona horaria', () => {
     spotifyTrackId: id,
     spotifyUrl: `https://open.spotify.com/track/${id}`,
     selectionCriterion: 'test',
+    description: DESCRIPTION,
     createdAt: '2026-12-01T00:00:00.000Z',
   });
   const catalog = () =>
@@ -507,5 +511,174 @@ describe('datos internos', () => {
   it('las particiones de la playlist no aparecen en el listado de canciones', async () => {
     const list = await call(repository(), event('/api/tracks'));
     expect((list.body as TrackListResponse).data).toHaveLength(1);
+  });
+});
+
+describe('canciones incompletas', () => {
+  const complete = (date: string, n = 1): DailyTrack => ({
+    date,
+    title: `Track ${date}`,
+    artist: `Artist ${n}`,
+    album: 'Album',
+    releaseYear: 1999,
+    spotifyTrackId: `track${String(n).padStart(17, '0')}`,
+    spotifyUrl: `https://open.spotify.com/track/track${String(n).padStart(17, '0')}`,
+    selectionCriterion: 'test',
+    description: DESCRIPTION,
+    createdAt: '2026-12-01T00:00:00.000Z',
+  });
+  const broken: [string, Partial<DailyTrack>][] = [
+    ['sin descripción', { description: undefined }],
+    ['descripción con una cita', { description: `${DESCRIPTION} "cita"` }],
+    ['descripción demasiado corta', { description: 'Corta.' }],
+    ['título vacío', { title: '  ' }],
+    ['sin enlace de Spotify', { spotifyUrl: '' }],
+    ['año inválido', { releaseYear: 1999.5 }],
+  ];
+  const repositoryWith = (...tracks: DailyTrack[]) => new InMemoryTrackRepository(tracks);
+
+  it.each(broken)(
+    '%s: /today, por fecha e historial responden como si no existiera',
+    async (_name, overrides) => {
+      const repository = repositoryWith(complete('2027-01-09', 1), {
+        ...complete('2027-01-10', 2),
+        ...overrides,
+      });
+
+      const today = await call(repository, event('/api/tracks/today'));
+      const byDate = await call(repository, event('/api/tracks/2027-01-10'));
+      const history = await call(repository, event('/api/tracks'));
+
+      expect(today.statusCode).toBe(404);
+      expect(byDate.statusCode).toBe(404);
+      expect((byDate.body as ErrorResponse).error.code).toBe('TRACK_NOT_FOUND');
+      expect(dates(history.body)).toEqual(['2027-01-09']);
+      // Mismo cuerpo que una fecha sin ningún registro: no revela que está en preparación.
+      const missing = await call(repository, event('/api/tracks/2027-01-08'));
+      expect((byDate.body as ErrorResponse).error.message.replace('2027-01-10', 'X')).toBe(
+        (missing.body as ErrorResponse).error.message.replace('2027-01-08', 'X'),
+      );
+    },
+  );
+
+  const dates = (body: unknown) => (body as TrackListResponse).data.map((item) => item.date);
+
+  it('no modifica ni sobrescribe el registro incompleto', async () => {
+    const incomplete = { ...complete('2027-01-10', 2), description: undefined } as DailyTrack;
+    const repository = repositoryWith(incomplete);
+    await call(repository, event('/api/tracks/2027-01-10'));
+    await call(repository, event('/api/tracks'));
+    expect(await repository.getByDate('2027-01-10')).toEqual(incomplete);
+  });
+
+  it('la paginación es estable con incompletas intercaladas: sin duplicados ni saltos', async () => {
+    // 2027-01-01 … 2027-01-10; incompletas: 03, 06, 07 y 10.
+    const incompleteDays = new Set(['2027-01-03', '2027-01-06', '2027-01-07', '2027-01-10']);
+    const tracks = Array.from({ length: 10 }, (_, index) => {
+      const date = `2027-01-${String(index + 1).padStart(2, '0')}`;
+      const track = complete(date, index + 1);
+      return incompleteDays.has(date) ? { ...track, description: undefined } : track;
+    }) as DailyTrack[];
+    const repository = repositoryWith(...tracks);
+
+    for (const limit of [1, 2, 3, 4, 6]) {
+      const seen: string[] = [];
+      let cursor: string | undefined;
+      for (let pages = 0; pages < 30; pages += 1) {
+        const response = await call(
+          repository,
+          event('/api/tracks', { limit: String(limit), ...(cursor ? { cursor } : {}) }),
+        );
+        const body = response.body as TrackListResponse;
+        expect(body.data.length).toBeLessThanOrEqual(limit);
+        seen.push(...dates(body));
+        if (body.pagination.nextCursor === null) break;
+        cursor = body.pagination.nextCursor;
+        expect(pages).toBeLessThan(29); // sin bucles
+      }
+      expect(seen).toEqual([
+        '2027-01-09',
+        '2027-01-08',
+        '2027-01-05',
+        '2027-01-04',
+        '2027-01-02',
+        '2027-01-01',
+      ]);
+    }
+  });
+
+  it('con las páginas llenas la primera respuesta ya trae `limit` canciones completas', async () => {
+    const repository = repositoryWith(
+      complete('2027-01-08', 1),
+      { ...complete('2027-01-09', 2), description: undefined } as DailyTrack,
+      complete('2027-01-10', 3),
+      complete('2027-01-07', 4),
+    );
+    const response = await call(repository, event('/api/tracks', { limit: '2' }));
+    const body = response.body as TrackListResponse;
+    expect(dates(body)).toEqual(['2027-01-10', '2027-01-08']);
+    expect(body.pagination.nextCursor).toEqual(expect.any(String));
+  });
+
+  it('una racha de incompletas más larga que el límite no devuelve páginas vacías', async () => {
+    const tracks = [
+      complete('2027-01-01', 1),
+      ...Array.from({ length: 11 }, (_, index) => ({
+        ...complete(`2027-01-${String(index + 2).padStart(2, '0')}`, index + 2),
+        description: undefined,
+      })),
+    ] as DailyTrack[];
+    const body = (await call(repositoryWith(...tracks), event('/api/tracks', { limit: '1' })))
+      .body as TrackListResponse;
+    expect(dates(body)).toEqual(['2027-01-01']);
+    expect(body.pagination.nextCursor).toBeNull();
+  });
+
+  it('no ofrece cursor si lo que queda es solo incompleto', async () => {
+    const tracks = [
+      complete('2027-01-02', 2),
+      { ...complete('2027-01-01', 1), description: undefined },
+    ] as DailyTrack[];
+    const body = (await call(repositoryWith(...tracks), event('/api/tracks', { limit: '1' })))
+      .body as TrackListResponse;
+    expect(dates(body)).toEqual(['2027-01-02']);
+    expect(body.pagination.nextCursor).toBeNull();
+  });
+
+  it('una racha larga de incompletas no crea bucles: el cursor siempre avanza', async () => {
+    // 2027-01-01 completa; 2027-01-02 … 2027-01-10 incompletas.
+    const tracks = [
+      complete('2027-01-01', 1),
+      ...Array.from({ length: 9 }, (_, index) => ({
+        ...complete(`2027-01-${String(index + 2).padStart(2, '0')}`, index + 2),
+        description: undefined,
+      })),
+    ] as DailyTrack[];
+    const repository = repositoryWith(...tracks);
+
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let pages = 0; pages < 20; pages += 1) {
+      const response = await call(
+        repository,
+        event('/api/tracks', { limit: '1', ...(cursor ? { cursor } : {}) }),
+      );
+      const body = response.body as TrackListResponse;
+      seen.push(...dates(body));
+      if (body.pagination.nextCursor === null) break;
+      expect(body.pagination.nextCursor).not.toBe(cursor);
+      cursor = body.pagination.nextCursor;
+    }
+    expect(seen).toEqual(['2027-01-01']);
+  });
+
+  it('el registro incompleto sigue visible para el estado interno del catálogo', async () => {
+    const repository = repositoryWith({
+      ...complete('2027-01-10', 2),
+      description: undefined,
+    } as DailyTrack);
+    const status = await getCatalogStatus(repository, ['2027-01-10']);
+    expect(status.incomplete).toEqual(['2027-01-10']);
+    expect(status.prepared).toEqual([]);
   });
 });

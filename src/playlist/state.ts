@@ -25,11 +25,19 @@ export interface PlaylistStateRepository {
   listSynced(year: number): Promise<SyncedEntry[]>;
   /** Idempotente: registrar dos veces la misma fecha deja el mismo resultado. */
   markSynced(year: number, entries: readonly SyncedEntry[]): Promise<void>;
+  /**
+   * Candado con vencimiento por playlist anual: evita que dos ejecuciones escriban a la vez.
+   * Devuelve false si otro dueño lo tiene vigente. Si la ejecución muere, vence solo.
+   */
+  acquireLock(year: number, owner: string, nowMs: number, ttlMs: number): Promise<boolean>;
+  /** Solo libera si el candado sigue siendo del mismo dueño. */
+  releaseLock(year: number, owner: string): Promise<void>;
 }
 
 export class InMemoryPlaylistState implements PlaylistStateRepository {
   readonly #playlists = new Map<number, PlaylistRecord>();
   readonly #synced = new Map<number, Map<IsoDate, SyncedEntry>>();
+  readonly #locks = new Map<number, { owner: string; expiresAtMs: number }>();
 
   getPlaylist(year: number): Promise<PlaylistRecord | null> {
     return Promise.resolve(this.#playlists.get(year) ?? null);
@@ -43,6 +51,18 @@ export class InMemoryPlaylistState implements PlaylistStateRepository {
 
   listSynced(year: number): Promise<SyncedEntry[]> {
     return Promise.resolve([...(this.#synced.get(year)?.values() ?? [])]);
+  }
+
+  acquireLock(year: number, owner: string, nowMs: number, ttlMs: number): Promise<boolean> {
+    const current = this.#locks.get(year);
+    if (current && current.expiresAtMs > nowMs) return Promise.resolve(false);
+    this.#locks.set(year, { owner, expiresAtMs: nowMs + ttlMs });
+    return Promise.resolve(true);
+  }
+
+  releaseLock(year: number, owner: string): Promise<void> {
+    if (this.#locks.get(year)?.owner === owner) this.#locks.delete(year);
+    return Promise.resolve();
   }
 
   markSynced(year: number, entries: readonly SyncedEntry[]): Promise<void> {

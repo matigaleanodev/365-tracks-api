@@ -33,6 +33,14 @@ describe('loadTrackManually', () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  it('rechaza el criterio deshabilitado como etiqueta nueva', async () => {
+    const result = await loadTrackManually({
+      raw: input({ selectionCriterion: 'music-anniversary' }),
+      now: NOW,
+    });
+    expect(result.status).toBe('invalid');
+  });
+
   it('crea la canción y queda disponible por fecha', async () => {
     const repository = new InMemoryTrackRepository();
     const result = await loadTrackManually({ raw: input(), now: NOW, repository });
@@ -57,7 +65,13 @@ describe('loadTrackManually', () => {
     const repository = new InMemoryTrackRepository();
     await loadTrackManually({ raw: input(), now: NOW, repository });
     const result = await loadTrackManually({
-      raw: input({ date: '2027-01-02' }),
+      raw: input({
+        date: '2027-01-02',
+        title: 'Another song',
+        artist: 'Another artist',
+        spotifyTrackId: '1301WleyT98MSxVHPZCA6M',
+        spotifyUrl: 'https://open.spotify.com/track/1301WleyT98MSxVHPZCA6M',
+      }),
       now: NOW,
       repository,
     });

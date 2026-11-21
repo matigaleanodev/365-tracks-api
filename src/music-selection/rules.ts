@@ -1,13 +1,28 @@
 import type { IsoDate } from '../shared/dates.ts';
-import type { SpotifyTrack } from '../spotify/index.ts';
-import { normalizeArtist } from '../spotify/matching.ts';
+import { artistIdentity } from '../tracks/artist-key.ts';
+import type { TrackConflict } from '../tracks/repository.ts';
 import type { DailyTrack } from '../tracks/types.ts';
 import { recordingKeyOf } from './recording-key.ts';
 
 /** Días mínimos entre dos canciones del mismo artista principal (antes y después). */
 export const DEFAULT_ARTIST_COOLDOWN_DAYS = 60;
 
-export type RuleViolation = 'duplicate-track' | 'duplicate-recording' | 'artist-cooldown';
+/** Lo mínimo que las reglas necesitan de una canción: sirve para candidatas y guardadas. */
+export interface TrackIdentity {
+  id: string;
+  title: string;
+  artist: string;
+  artistId: string | undefined;
+}
+
+export const identityOf = (track: DailyTrack): TrackIdentity => ({
+  id: track.spotifyTrackId,
+  title: track.title,
+  artist: track.artist,
+  artistId: track.spotifyArtistId,
+});
+
+export type RuleViolation = TrackConflict;
 
 interface ArtistEntry {
   date: IsoDate;
@@ -34,7 +49,7 @@ export function buildHistory(tracks: readonly DailyTrack[]): HistoryIndex {
     artists: tracks.map((track) => ({
       date: track.date,
       artistId: track.spotifyArtistId,
-      artistKey: normalizeArtist(track.artist),
+      artistKey: artistIdentity(track.artist),
     })),
   };
 }
@@ -43,11 +58,11 @@ export function buildHistory(tracks: readonly DailyTrack[]): HistoryIndex {
  * Reglas de no repetición para la canción candidata de `date`:
  * - nunca una canción ya elegida (por ID de Spotify, o por título + artista si cambió el ID);
  * - nunca el mismo artista principal a menos de `cooldownDays` de otra fecha, hacia atrás o hacia
- *   adelante. Coincide por ID de Spotify o por nombre normalizado: el ID solo no alcanza
+ *   adelante. Coincide por ID de Spotify o por identidad del nombre (normalizado): el ID solo no alcanza
  *   (cargas manuales sin ID, perfiles duplicados del mismo artista).
  */
 export function findViolation(
-  candidate: SpotifyTrack,
+  candidate: TrackIdentity,
   date: IsoDate,
   history: HistoryIndex,
   cooldownDays: number = DEFAULT_ARTIST_COOLDOWN_DAYS,
@@ -56,10 +71,11 @@ export function findViolation(
   if (history.recordings.has(recordingKeyOf(candidate.title, candidate.artist))) {
     return 'duplicate-recording';
   }
-  const artistKey = normalizeArtist(candidate.artist);
+  const artistKey = artistIdentity(candidate.artist);
   const sameArtist = history.artists.some(
     (entry) =>
-      (entry.artistId === candidate.artistId || entry.artistKey === artistKey) &&
+      ((candidate.artistId !== undefined && entry.artistId === candidate.artistId) ||
+        entry.artistKey === artistKey) &&
       daysBetween(entry.date, date) < cooldownDays,
   );
   return sameArtist ? 'artist-cooldown' : null;

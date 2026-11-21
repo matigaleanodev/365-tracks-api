@@ -18,6 +18,11 @@ export interface DescriptionRules {
    * descripción generada afirme fechas que no se verificaron contra el catálogo.
    */
   allowedYears?: readonly number[];
+  /**
+   * Rechaza cualquier dígito: ninguna fecha, año (completo o abreviado) ni cifra, porque no hay
+   * fuente verificable para respaldarlos. Es lo que se exige a las descripciones generadas.
+   */
+  forbidDigits?: boolean;
   /** Rechaza nombres de mes: afirmaciones de fecha que el selector no verificó. */
   forbidMonths?: boolean;
 }
@@ -39,6 +44,9 @@ export function findDescriptionIssues(value: unknown, rules: DescriptionRules = 
   if (/[\r\n]/.test(text)) issues.push('must be a single paragraph');
   if (URL_PATTERN.test(text)) issues.push('must not contain links');
   if (QUOTE_PATTERN.test(text)) issues.push('must not contain quotations');
+  if (rules.forbidDigits && /\d/.test(text)) {
+    issues.push('must not contain digits (dates, years or numbers are not verified)');
+  }
   if (rules.forbidMonths && MONTH_PATTERN.test(text)) {
     issues.push('mentions a date that was not verified');
   }

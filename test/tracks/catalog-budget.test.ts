@@ -6,6 +6,7 @@ import { InMemoryTrackRepository } from '../../src/tracks/in-memory-repository.t
 import {
   DESCRIPTION,
   fakeSpotify,
+  ownArtist,
   preparedTrack,
   spotifyId,
   spotifyTrack,
@@ -26,7 +27,7 @@ function deps(initial = [] as ReturnType<typeof preparedTrack>[]) {
     }),
   };
   const spotify = fakeSpotify({
-    getTrack: (id) => Promise.resolve(spotifyTrack(id, { title: `Song ${id}` })),
+    getTrack: (id) => Promise.resolve(spotifyTrack(id, { title: `Song ${id}`, ...ownArtist(id) })),
   });
   const repository = new InMemoryTrackRepository(initial);
   return { repository, selector, spotify, now: () => NOW };

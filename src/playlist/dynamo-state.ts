@@ -14,6 +14,8 @@ import type { PlaylistRecord, PlaylistStateRepository, SyncedEntry } from './sta
  */
 export const PLAYLIST_PARTITION = 'PLAYLIST';
 const syncedPartition = (year: number) => `PLAYLIST#${year}`;
+/** Candados por año. Partición propia: no se mezcla con `PLAYLIST#<año>` ni con `TRACK`. */
+export const PLAYLIST_LOCK_PARTITION = 'PLAYLIST_LOCK';
 
 export class DynamoPlaylistState implements PlaylistStateRepository {
   readonly #client: DynamoDBDocumentClient;
@@ -88,5 +90,47 @@ export class DynamoPlaylistState implements PlaylistStateRepository {
         ),
       ),
     );
+  }
+
+  /** Put condicional: gana quien lo toma libre o vencido. Solo requiere dynamodb:PutItem. */
+  async acquireLock(year: number, owner: string, nowMs: number, ttlMs: number): Promise<boolean> {
+    try {
+      await this.#client.send(
+        new PutCommand({
+          TableName: this.#tableName,
+          Item: {
+            pk: PLAYLIST_LOCK_PARTITION,
+            date: String(year),
+            owner,
+            expiresAtMs: nowMs + ttlMs,
+          },
+          ConditionExpression: 'attribute_not_exists(pk) OR expiresAtMs <= :now',
+          ExpressionAttributeValues: { ':now': nowMs },
+        }),
+      );
+      return true;
+    } catch (error) {
+      if (error instanceof ConditionalCheckFailedException) return false;
+      throw error;
+    }
+  }
+
+  /** Liberar es vencer el candado (otro Put condicional por dueño): no necesita DeleteItem. */
+  async releaseLock(year: number, owner: string): Promise<void> {
+    try {
+      await this.#client.send(
+        new PutCommand({
+          TableName: this.#tableName,
+          Item: { pk: PLAYLIST_LOCK_PARTITION, date: String(year), owner, expiresAtMs: 0 },
+          ConditionExpression: 'attribute_exists(pk) AND #owner = :owner',
+          ExpressionAttributeNames: { '#owner': 'owner' },
+          ExpressionAttributeValues: { ':owner': owner },
+        }),
+      );
+    } catch (error) {
+      // Ya vencido y tomado por otro: no hay nada que liberar.
+      if (error instanceof ConditionalCheckFailedException) return;
+      throw error;
+    }
   }
 }

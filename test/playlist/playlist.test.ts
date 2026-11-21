@@ -6,7 +6,12 @@ import {
   playlistYear,
 } from '../../src/playlist/eligibility.ts';
 import { InMemoryPlaylistState } from '../../src/playlist/state.ts';
-import { syncPlaylists, type SyncDependencies } from '../../src/playlist/sync.ts';
+import {
+  LOCK_TTL_MS,
+  syncPlaylists,
+  WriteBudgetExhaustedError,
+  type SyncDependencies,
+} from '../../src/playlist/sync.ts';
 import type { SpotifyPlaylistClient } from '../../src/spotify/playlist-client.ts';
 import { InMemoryTrackRepository } from '../../src/tracks/in-memory-repository.ts';
 import type { DailyTrack } from '../../src/tracks/types.ts';
@@ -53,7 +58,8 @@ function fakePlaylists(initial: Record<string, string[]> = {}) {
           : null,
       ),
     ),
-    create: vi.fn(({ name }: { name: string }) => {
+    create: vi.fn(({ name }: { name: string }, guard?: (startsInMs: number) => void) => {
+      guard?.(0);
       counter += 1;
       lists.set(`id-${name}`, []);
       return Promise.resolve({
@@ -62,11 +68,16 @@ function fakePlaylists(initial: Record<string, string[]> = {}) {
         n: counter,
       });
     }),
-    listTrackIds: vi.fn((id: string) => Promise.resolve([...(lists.get(id) ?? [])])),
-    addTracks: vi.fn((id: string, ids: readonly string[]) => {
-      lists.set(id, [...(lists.get(id) ?? []), ...ids]);
-      return Promise.resolve();
-    }),
+    listItems: vi.fn((id: string) => Promise.resolve([...(lists.get(id) ?? [])])),
+    addTracks: vi.fn(
+      (id: string, ids: readonly string[], position?: number, guard?: (n: number) => void) => {
+        guard?.(0);
+        const list = [...(lists.get(id) ?? [])];
+        list.splice(position ?? list.length, 0, ...ids);
+        lists.set(id, list);
+        return Promise.resolve();
+      },
+    ),
   };
   return { client: client as unknown as SpotifyPlaylistClient, lists, spies: client };
 }
@@ -106,6 +117,7 @@ describe('syncPlaylists', () => {
         wouldCreatePlaylist: false,
         added: ['2027-01-01', '2027-01-02', '2027-01-03'],
         adopted: [],
+        external: 0,
       },
     ]);
     expect(lists.get('id-365 Tracks 2027')).toEqual([spotifyId(1), spotifyId(2), spotifyId(3)]);
@@ -229,5 +241,201 @@ describe('syncPlaylists', () => {
     const retry = await syncPlaylists(ctx.deps);
     expect(retry.years[0]?.added).toHaveLength(3);
     expect(ctx.lists.get('id-365 Tracks 2027')).toHaveLength(3);
+  });
+
+  describe('reconciliación con la playlist real', () => {
+    const PL = 'id-365 Tracks 2027';
+    const synced = async (ctx: ReturnType<typeof setup>) => {
+      await syncPlaylists(ctx.deps);
+      ctx.spies.addTracks.mockClear();
+      return ctx;
+    };
+
+    it('recupera una canción borrada a mano aunque figure como sincronizada', async () => {
+      const ctx = await synced(setup(tracks, NOW));
+      ctx.lists.set(PL, [spotifyId(1), spotifyId(3)]); // borraron la del 2
+
+      const report = await syncPlaylists(ctx.deps);
+
+      expect(report.years[0]?.added).toEqual(['2027-01-02']);
+      expect(ctx.lists.get(PL)).toEqual([spotifyId(1), spotifyId(2), spotifyId(3)]);
+    });
+
+    it('recupera varias faltantes en su lugar cronológico, sin duplicar', async () => {
+      const ctx = await synced(setup(tracks, NOW));
+      ctx.lists.set(PL, [spotifyId(2)]); // borraron la primera y la última
+
+      await syncPlaylists(ctx.deps);
+      expect(ctx.lists.get(PL)).toEqual([spotifyId(1), spotifyId(2), spotifyId(3)]);
+
+      ctx.spies.addTracks.mockClear();
+      const again = await syncPlaylists(ctx.deps);
+      expect(again.years).toEqual([]);
+      expect(ctx.spies.addTracks).not.toHaveBeenCalled();
+    });
+
+    it('si la playlist quedó vacía la rearma completa y en orden', async () => {
+      const ctx = await synced(setup(tracks, NOW));
+      ctx.lists.set(PL, []);
+      await syncPlaylists(ctx.deps);
+      expect(ctx.lists.get(PL)).toEqual([spotifyId(1), spotifyId(2), spotifyId(3)]);
+    });
+
+    it('nunca borra ni mueve canciones ajenas agregadas en Spotify', async () => {
+      const ctx = await synced(setup(tracks, NOW));
+      ctx.lists.set(PL, [spotifyId(1), 'externaaaaaaaaaaaaaaaa', spotifyId(3)]);
+
+      const report = await syncPlaylists(ctx.deps);
+
+      expect(report.years[0]).toMatchObject({ added: ['2027-01-02'], external: 1 });
+      expect(ctx.lists.get(PL)).toContain('externaaaaaaaaaaaaaaaa');
+      expect(ctx.lists.get(PL)).toHaveLength(4);
+    });
+
+    it('no agrega canciones no elegibles ni incompletas al recuperar', async () => {
+      const mixed = [
+        day('2027-01-01', 1),
+        day('2027-01-02', 2, { description: '' }), // incompleta
+        day('2027-01-03', 3),
+        day('2027-01-04', 4), // futura
+      ];
+      const ctx = await synced(setup(mixed, NOW));
+      ctx.lists.set(PL, []);
+
+      const report = await syncPlaylists(ctx.deps);
+
+      expect(report.skippedIncomplete).toEqual(['2027-01-02']);
+      expect(ctx.lists.get(PL)).toEqual([spotifyId(1), spotifyId(3)]);
+    });
+
+    it('una escritura parcial se completa en el reintento sin duplicar', async () => {
+      const ctx = await synced(setup(tracks, NOW));
+      ctx.lists.set(PL, []);
+      ctx.spies.addTracks.mockImplementationOnce((id: string, ids: readonly string[]) => {
+        ctx.lists.set(PL, [...ids.slice(0, 1)]); // llegó una sola antes de fallar
+        return Promise.reject(new Error('timeout'));
+      });
+
+      await expect(syncPlaylists(ctx.deps)).rejects.toThrow('timeout');
+      await syncPlaylists(ctx.deps);
+
+      expect(ctx.lists.get(PL)).toEqual([spotifyId(1), spotifyId(2), spotifyId(3)]);
+    });
+  });
+
+  describe('lease y posiciones físicas', () => {
+    const PL = 'id-365 Tracks 2027';
+
+    it('no escribe si el candado está por vencer y la siguiente ejecución relee', async () => {
+      const ctx = setup(tracks, NOW);
+      let offsetMs = 0;
+      ctx.deps.now = () => new Date(at(NOW).getTime() + offsetMs);
+      // La playlist se crea con el candado vigente; luego pasa el TTL antes del primer bloque.
+      ctx.spies.listItems.mockImplementationOnce(() => {
+        offsetMs = LOCK_TTL_MS;
+        return Promise.resolve([]);
+      });
+      await expect(syncPlaylists(ctx.deps)).rejects.toBeInstanceOf(WriteBudgetExhaustedError);
+      expect(ctx.spies.addTracks).toHaveBeenCalledTimes(1);
+      expect(ctx.lists.get(PL)).toEqual([]);
+
+      offsetMs = 0;
+      const retry = await syncPlaylists(ctx.deps);
+      expect(retry.skippedLocked).toEqual([]);
+      expect(ctx.lists.get(PL)).toEqual([spotifyId(1), spotifyId(2), spotifyId(3)]);
+    });
+
+    it('con un ítem sin ID (archivo local) la posición cuenta todos los ítems físicos', async () => {
+      const ctx = setup(
+        tracks,
+        NOW,
+        fakePlaylists({ [PL]: [null as unknown as string, spotifyId(1), spotifyId(3)] }),
+      );
+      await syncPlaylists(ctx.deps);
+      expect(ctx.lists.get(PL)).toEqual([null, spotifyId(1), spotifyId(2), spotifyId(3)]);
+      expect(ctx.spies.addTracks).toHaveBeenCalledWith(PL, [spotifyId(2)], 2, expect.any(Function));
+    });
+
+    it('actualiza el registro cuando una fecha cambia de ID y el nuevo ya está en la playlist', async () => {
+      const ctx = setup(tracks, NOW);
+      await syncPlaylists(ctx.deps);
+      const swapped = day('2027-01-02', 22);
+      ctx.lists.set(PL, [spotifyId(1), swapped.spotifyTrackId, spotifyId(3)]);
+      const deps = {
+        ...ctx.deps,
+        tracks: new InMemoryTrackRepository([tracks[0]!, swapped, tracks[2]!]),
+      };
+      await syncPlaylists(deps);
+      const entry = (await ctx.state.listSynced(2027)).find((e) => e.date === '2027-01-02');
+      expect(entry?.spotifyTrackId).toBe(swapped.spotifyTrackId);
+    });
+
+    it('documenta la política: duplicados y orden existentes no se reparan ni se agrega nada extra', async () => {
+      const ctx = setup(
+        tracks,
+        NOW,
+        fakePlaylists({ [PL]: [spotifyId(3), spotifyId(1), spotifyId(1)] }),
+      );
+      await syncPlaylists(ctx.deps);
+      expect(ctx.lists.get(PL)?.filter((id) => id === spotifyId(1))).toHaveLength(2);
+      expect(ctx.lists.get(PL)).toContain(spotifyId(2));
+      expect(ctx.lists.get(PL)).toHaveLength(4);
+    });
+  });
+
+  describe('concurrencia por playlist anual', () => {
+    it('dos ejecuciones simultáneas no duplican canciones', async () => {
+      const ctx = setup(tracks, NOW);
+      const [a, b] = await Promise.all([syncPlaylists(ctx.deps), syncPlaylists(ctx.deps)]);
+
+      expect(ctx.lists.get('id-365 Tracks 2027')).toEqual([
+        spotifyId(1),
+        spotifyId(2),
+        spotifyId(3),
+      ]);
+      expect(ctx.spies.create).toHaveBeenCalledTimes(1);
+      expect([a.skippedLocked, b.skippedLocked].flat()).toEqual([2027]);
+    });
+
+    it('si el candado está vigente no escribe y lo informa', async () => {
+      const ctx = setup(tracks, NOW);
+      await ctx.state.acquireLock(2027, 'otra-ejecucion', at(NOW).getTime(), LOCK_TTL_MS);
+
+      const report = await syncPlaylists(ctx.deps);
+
+      expect(report.skippedLocked).toEqual([2027]);
+      expect(ctx.spies.addTracks).not.toHaveBeenCalled();
+    });
+
+    it('un candado vencido (ejecución caída) se recupera solo', async () => {
+      const ctx = setup(tracks, NOW);
+      await ctx.state.acquireLock(2027, 'caida', at(NOW).getTime() - LOCK_TTL_MS - 1, LOCK_TTL_MS);
+
+      const report = await syncPlaylists(ctx.deps);
+
+      expect(report.skippedLocked).toEqual([]);
+      expect(ctx.lists.get('id-365 Tracks 2027')).toHaveLength(3);
+    });
+
+    it('libera el candado aunque falle la escritura, y no libera uno ajeno', async () => {
+      const ctx = setup(tracks, NOW);
+      ctx.spies.addTracks.mockRejectedValueOnce(new Error('spotify down'));
+      await expect(syncPlaylists(ctx.deps)).rejects.toThrow('spotify down');
+      expect(await syncPlaylists(ctx.deps)).toMatchObject({ skippedLocked: [] });
+
+      await ctx.state.acquireLock(2027, 'otro', at(NOW).getTime(), LOCK_TTL_MS);
+      await ctx.state.releaseLock(2027, 'distinto');
+      expect(await ctx.state.acquireLock(2027, 'tercero', at(NOW).getTime(), LOCK_TTL_MS)).toBe(
+        false,
+      );
+    });
+
+    it('el dry-run no toma el candado', async () => {
+      const ctx = setup(tracks, NOW);
+      await ctx.state.acquireLock(2027, 'otro', at(NOW).getTime(), LOCK_TTL_MS);
+      const report = await syncPlaylists(ctx.deps, { dryRun: true });
+      expect(report.skippedLocked).toEqual([]);
+      expect(report.years[0]?.added).toHaveLength(3);
+    });
   });
 });

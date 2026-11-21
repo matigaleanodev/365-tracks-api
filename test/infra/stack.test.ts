@@ -99,4 +99,50 @@ describe('Tracks365ApiStack', () => {
     expect(actions).not.toContain('dynamodb:*');
     expect(actions).not.toContain('dynamodb:DeleteItem');
   });
+
+  it('exige la boundary de runtime como parámetro y la aplica a todos los roles', () => {
+    const template = synth();
+    const parameter = template.toJSON().Parameters.RuntimePermissionsBoundaryArn;
+    expect(parameter.Type).toBe('String');
+    expect(parameter.Default).toBeUndefined();
+    expect(parameter.AllowedPattern).toContain('arn:aws:iam::');
+
+    const roles = Object.values(template.findResources('AWS::IAM::Role'));
+    expect(roles).toHaveLength(3);
+    for (const role of roles) {
+      expect(role.Properties.PermissionsBoundary).toEqual({ Ref: 'RuntimePermissionsBoundaryArn' });
+    }
+  });
+
+  it('los roles de Lambda no usan managed policies y escriben solo en su log group', () => {
+    const template = synth();
+    const lambdaRoles = Object.values(template.findResources('AWS::IAM::Role')).filter(
+      (role) =>
+        role.Properties.AssumeRolePolicyDocument.Statement[0].Principal.Service ===
+        'lambda.amazonaws.com',
+    );
+    expect(lambdaRoles).toHaveLength(2);
+    for (const role of lambdaRoles) {
+      expect(role.Properties.ManagedPolicyArns).toBeUndefined();
+    }
+
+    const statements = Object.values(template.findResources('AWS::IAM::Policy')).flatMap(
+      (policy) =>
+        policy.Properties.PolicyDocument.Statement as {
+          Action: string | string[];
+          Resource: unknown;
+        }[],
+    );
+    const logStatements = statements.filter((statement) =>
+      [statement.Action].flat().some((action) => action.startsWith('logs:')),
+    );
+    expect(logStatements).toHaveLength(2);
+    for (const statement of logStatements) {
+      expect([statement.Action].flat().sort()).toEqual([
+        'logs:CreateLogStream',
+        'logs:PutLogEvents',
+      ]);
+      expect(statement.Resource).not.toBe('*');
+    }
+  });
 });

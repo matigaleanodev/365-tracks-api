@@ -1,5 +1,12 @@
 import { fileURLToPath } from 'node:url';
-import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
+import {
+  CfnOutput,
+  CfnParameter,
+  Duration,
+  RemovalPolicy,
+  Stack,
+  type StackProps,
+} from 'aws-cdk-lib';
 import * as apigwv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
@@ -37,6 +44,17 @@ export class Tracks365ApiStack extends Stack {
       generateDailyTrack: builtCode('generate-daily-track'),
     };
 
+    // La boundary la crea y revisa un paso de administración previo; este stack solo la referencia.
+    // Se aplica a todos los roles del stack, incluidos los que se agreguen más adelante.
+    const boundaryArn = new CfnParameter(this, 'RuntimePermissionsBoundaryArn', {
+      type: 'String',
+      allowedPattern: '^arn:aws:iam::[0-9]{12}:policy/[A-Za-z0-9+=,.@_/-]+$',
+      description: 'ARN de la permissions boundary de runtime, creada previamente.',
+    });
+    iam.PermissionsBoundary.of(this).apply(
+      iam.ManagedPolicy.fromManagedPolicyArn(this, 'RuntimeBoundary', boundaryArn.valueAsString),
+    );
+
     // Un ítem por fecha: pk constante + sk = fecha. Permite GetItem por fecha, Query ordenado
     // para el historial y PutItem condicional (idempotencia). Escala de sobra: ~365 ítems/año.
     const table = new dynamodb.Table(this, 'TracksTable', {
@@ -58,19 +76,23 @@ export class Tracks365ApiStack extends Stack {
       },
     };
 
+    const apiLogs = this.logGroup('ApiLogs');
     const apiFunction = new lambda.Function(this, 'ApiFunction', {
       ...commonFunctionProps,
       code: code.api,
       timeout: Duration.seconds(10),
-      logGroup: this.logGroup('ApiLogs'),
+      role: this.runtimeRole('ApiRole', apiLogs),
+      logGroup: apiLogs,
     });
     table.grant(apiFunction, 'dynamodb:GetItem', 'dynamodb:Query');
 
+    const generateLogs = this.logGroup('GenerateDailyTrackLogs');
     const generateFunction = new lambda.Function(this, 'GenerateDailyTrackFunction', {
       ...commonFunctionProps,
       code: code.generateDailyTrack,
       timeout: Duration.seconds(60),
-      logGroup: this.logGroup('GenerateDailyTrackLogs'),
+      role: this.runtimeRole('GenerateDailyTrackRole', generateLogs),
+      logGroup: generateLogs,
     });
     table.grant(generateFunction, 'dynamodb:GetItem', 'dynamodb:PutItem');
 
@@ -120,6 +142,15 @@ export class Tracks365ApiStack extends Stack {
 
     new CfnOutput(this, 'ApiUrl', { value: stage.url });
     new CfnOutput(this, 'TracksTableName', { value: table.tableName });
+  }
+
+  /** Rol propio y mínimo: solo escribe en su log group (sin AWSLambdaBasicExecutionRole). */
+  private runtimeRole(id: string, logGroup: logs.LogGroup): iam.Role {
+    const role = new iam.Role(this, id, {
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+    });
+    logGroup.grantWrite(role);
+    return role;
   }
 
   private logGroup(id: string): logs.LogGroup {

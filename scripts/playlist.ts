@@ -25,6 +25,9 @@ const profile = process.env.AWS_PROFILE;
 if (!profile) {
   fail('Set AWS_PROFILE to an authorized profile: ambient credentials are not used on purpose.');
 }
+if (values.write && values.now) {
+  fail('--now only works in dry-run: writing always uses the real clock (eligibility and lock).');
+}
 const clock = values.now ? new Date(values.now) : undefined;
 if (clock && Number.isNaN(clock.getTime())) {
   fail('--now must be an ISO 8601 instant, e.g. 2027-01-02T12:30:00Z');

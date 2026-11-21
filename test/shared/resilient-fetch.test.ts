@@ -116,6 +116,59 @@ describe('requestJson', () => {
     await expect(limited.call()).resolves.toMatchObject({ status: 200 });
   });
 
+  it('beforeAttempt corre antes de cada intento y con la espera antes de dormir', async () => {
+    const events: string[] = [];
+    let sent = 0;
+    const fetchMock = vi.fn(() => {
+      events.push('fetch');
+      sent += 1;
+      return Promise.resolve(reply(sent === 1 ? 429 : 200, {}, { 'retry-after': '3' }));
+    });
+    const sleep = vi.fn(() => {
+      events.push('sleep');
+      return Promise.resolve();
+    });
+    await requestJson(
+      'POST /v1/things',
+      'https://api.example/v1/things',
+      { method: 'POST' },
+      policy,
+      {
+        fetch: fetchMock as unknown as typeof fetch,
+        sleep,
+        random: () => 0.5,
+        beforeAttempt: (startsInMs) => events.push(`guard:${startsInMs}`),
+      },
+    );
+    expect(events).toEqual(['guard:0', 'fetch', 'guard:3000', 'sleep', 'guard:0', 'fetch']);
+  });
+
+  it('si beforeAttempt lanza ante un reintento no duerme ni vuelve a enviar', async () => {
+    const stop = new Error('budget');
+    const fetchMock = vi.fn(() => Promise.resolve(reply(429, {}, { 'retry-after': '3' })));
+    const sleep = vi.fn(() => Promise.resolve());
+    await expect(
+      requestJson('POST /v1/things', 'https://api.example/v1/things', { method: 'POST' }, policy, {
+        fetch: fetchMock as unknown as typeof fetch,
+        sleep,
+        beforeAttempt: (startsInMs) => {
+          if (startsInMs > 0) throw stop;
+        },
+      }),
+    ).rejects.toBe(stop);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it('todo 5xx es server-error, pero solo 500/502/503/504 se reintentan', async () => {
+    const odd = run([reply(507), reply(200)]);
+    await expect(odd.call()).rejects.toMatchObject({ kind: 'server-error', status: 507 });
+    expect(odd.fetchMock).toHaveBeenCalledTimes(1);
+
+    const retried = run([reply(502), reply(200)]);
+    await expect(retried.call()).resolves.toMatchObject({ status: 200 });
+  });
+
   it('el mensaje de error no incluye la query ni el cuerpo', async () => {
     const { call } = run([reply(404, { detail: 'secret-title' })]);
     const error = (await call().catch((e: unknown) => e)) as HttpError;

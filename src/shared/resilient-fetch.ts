@@ -27,6 +27,12 @@ export interface HttpDependencies {
   sleep?: (ms: number) => Promise<void>;
   /** Devuelve un número en [0, 1); se inyecta para tests deterministas. */
   random?: () => number;
+  /**
+   * Se llama justo antes de cada intento real con 0, y antes de dormir para un reintento con la
+   * espera calculada. Si lanza, la llamada se aborta sin enviar ni esperar más: sirve para
+   * imponer un presupuesto de tiempo a las escrituras.
+   */
+  beforeAttempt?: (startsInMs: number) => void;
 }
 
 export interface JsonResponse {
@@ -108,9 +114,16 @@ export async function requestJson(
   url: string,
   init: RequestInit,
   policy: HttpPolicy = DEFAULT_HTTP_POLICY,
-  { fetch: fetchImpl = fetch, sleep = defaultSleep, random = Math.random }: HttpDependencies = {},
+  {
+    fetch: fetchImpl = fetch,
+    sleep = defaultSleep,
+    random = Math.random,
+    beforeAttempt,
+  }: HttpDependencies = {},
 ): Promise<JsonResponse> {
   for (let attempt = 0; ; attempt += 1) {
+    // Fuera del try: lo que lance el guard no es un fallo HTTP reintentable.
+    beforeAttempt?.(0);
     const backoff = Math.min(policy.maxDelayMs, policy.baseDelayMs * 2 ** attempt);
     const jittered = Math.round(backoff * (0.5 + random() / 2));
     let failure: HttpError;
@@ -144,7 +157,8 @@ export async function requestJson(
           body,
           ...(retryAfterMs !== undefined && { retryAfterMs }),
         });
-      } else if (RETRYABLE_STATUS.has(response.status)) {
+      } else if (response.status >= 500) {
+        // Todo 5xx es un fallo del servidor (y ambiguo en un POST); cuáles se reintentan se decide abajo.
         failure = new HttpError('server-error', description, { status: response.status, body });
       } else {
         throw new HttpError('client-error', description, { status: response.status, body });
@@ -161,9 +175,20 @@ export async function requestJson(
     if (attempt >= policy.maxRetries) {
       throw failure;
     }
+    // Un 5xx fuera de la lista (501, 507, 511…) no mejora esperando.
+    if (
+      failure.status !== undefined &&
+      failure.status >= 500 &&
+      !RETRYABLE_STATUS.has(failure.status)
+    ) {
+      throw failure;
+    }
     if (policy.retryAmbiguousFailures === false && failure.kind !== 'rate-limited') {
       throw failure;
     }
-    await sleep(Math.max(jittered, failure.retryAfterMs ?? 0));
+    const delayMs = Math.max(jittered, failure.retryAfterMs ?? 0);
+    // Si esperar agota el presupuesto, se aborta ahora: sin dormir ni reenviar.
+    beforeAttempt?.(delayMs);
+    await sleep(delayMs);
   }
 }

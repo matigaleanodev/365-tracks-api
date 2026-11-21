@@ -85,4 +85,48 @@ describe('DynamoPlaylistState', () => {
       { date: '2027-01-01', spotifyTrackId: 't', syncedAt: 's' },
     ]);
   });
+
+  it('el candado es un Put condicional en su propia partición, con vencimiento', async () => {
+    const { state, send } = setup();
+    expect(await state.acquireLock(2027, 'yo', 1000, 300_000)).toBe(true);
+    const command = send.mock.calls[0]?.[0] as PutCommand;
+    expect(command.input.Item).toEqual({
+      pk: 'PLAYLIST_LOCK',
+      date: '2027',
+      owner: 'yo',
+      expiresAtMs: 301_000,
+    });
+    expect(command.input.ConditionExpression).toBe(
+      'attribute_not_exists(pk) OR expiresAtMs <= :now',
+    );
+    expect(command.input.ExpressionAttributeValues).toEqual({ ':now': 1000 });
+  });
+
+  it('con el candado vigente de otro, acquireLock devuelve false', async () => {
+    const { state } = setup(
+      () => new ConditionalCheckFailedException({ message: 'held', $metadata: {} }),
+    );
+    expect(await state.acquireLock(2027, 'yo', 1000, 300_000)).toBe(false);
+  });
+
+  it('liberar vence el candado solo si sigue siendo del dueño (sin DeleteItem)', async () => {
+    const { state, send } = setup();
+    await state.releaseLock(2027, 'yo');
+    const command = send.mock.calls[0]?.[0] as PutCommand;
+    expect(command).toBeInstanceOf(PutCommand);
+    expect(command.input.Item).toMatchObject({ pk: 'PLAYLIST_LOCK', expiresAtMs: 0 });
+    expect(command.input.ExpressionAttributeValues).toEqual({ ':owner': 'yo' });
+  });
+
+  it('liberar un candado ya tomado por otro no falla', async () => {
+    const { state } = setup(
+      () => new ConditionalCheckFailedException({ message: 'other', $metadata: {} }),
+    );
+    await expect(state.releaseLock(2027, 'yo')).resolves.toBeUndefined();
+  });
+
+  it('otros errores al tomar el candado se propagan', async () => {
+    const { state } = setup(() => new Error('throttled'));
+    await expect(state.acquireLock(2027, 'yo', 1, 1)).rejects.toThrow('throttled');
+  });
 });

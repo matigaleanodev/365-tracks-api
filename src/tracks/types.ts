@@ -17,8 +17,16 @@ export interface DailyTrackRequired {
 export interface DailyTrackOptional {
   /** Spotify puede no devolver portada. */
   coverUrl?: string;
-  /** Texto editorial; se genera en una etapa posterior. */
+  /**
+   * Texto editorial. Opcional en el contrato HTTP por compatibilidad, pero una canción sin
+   * descripción válida no está preparada (ver `completeness.ts`).
+   */
   description?: string;
+  /**
+   * Artista principal en Spotify. Uso interno (rotación de artistas): la API no lo expone.
+   * Las cargas manuales antiguas pueden no tenerlo; entonces se compara por nombre.
+   */
+  spotifyArtistId?: string;
 }
 
 export type DailyTrack = DailyTrackRequired & DailyTrackOptional;

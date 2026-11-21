@@ -1,6 +1,7 @@
 import type { MusicSelector } from '../music-selection/index.ts';
 import type { IsoDate } from '../shared/dates.ts';
 import type { SpotifyClient } from '../spotify/index.ts';
+import { findIncompleteFields, IncompleteTrackError } from './completeness.ts';
 import type { TrackRepository } from './repository.ts';
 import type { DailyTrack } from './types.ts';
 
@@ -41,13 +42,18 @@ export async function generateDailyTrack(
     spotifyTrackId: metadata.id,
     spotifyUrl: metadata.url,
     selectionCriterion: selection.selectionCriterion,
+    description: selection.description,
+    spotifyArtistId: metadata.artistId,
     createdAt: now().toISOString(),
   };
   if (metadata.coverUrl !== undefined) {
     track.coverUrl = metadata.coverUrl;
   }
-  if (selection.description !== undefined) {
-    track.description = selection.description;
+
+  // Nunca se escribe una canción incompleta: la fecha queda libre para un reintento.
+  const incomplete = findIncompleteFields(track);
+  if (incomplete.length > 0) {
+    throw new IncompleteTrackError(date, incomplete);
   }
 
   if ((await repository.create(track)) === 'created') {

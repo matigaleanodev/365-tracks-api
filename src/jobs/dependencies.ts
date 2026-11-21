@@ -78,7 +78,9 @@ export async function createPlaylistDependencies(
     clientId: parameters.require(PARAMETER_KEYS.spotifyClientId),
     clientSecret: parameters.require(PARAMETER_KEYS.spotifyClientSecret),
     refreshToken: parameters.require(PARAMETER_KEYS.spotifyRefreshToken),
-    // Spotify puede rotar el refresh token: se guarda antes de seguir usándolo.
+    // Única escritura posible fuera de `syncPlaylists`, también en dry-run: guardar en Parameter
+    // Store el refresh token que Spotify rotó (descartarlo podría invalidar la autorización).
+    // `put` se invoca solo ante rotación; nunca modifica playlists ni registros de sincronización.
     onRefreshTokenRotated: (token) =>
       store.put(parameterName(prefix, PARAMETER_KEYS.spotifyRefreshToken), token),
   });

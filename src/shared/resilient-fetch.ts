@@ -1,3 +1,5 @@
+import type { TimeBudget } from './time-budget.ts';
+
 export interface HttpPolicy {
   /** Tiempo máximo de cada intento. */
   timeoutMs: number;
@@ -33,6 +35,13 @@ export interface HttpDependencies {
    * imponer un presupuesto de tiempo a las escrituras.
    */
   beforeAttempt?: (startsInMs: number) => void;
+  /**
+   * Presupuesto de tiempo de la invocación (por llamada, no por cliente). Un intento solo empieza
+   * si entra completo (su timeout) antes del límite menos la reserva; esperar un reintento exige
+   * que entren la espera y el timeout del intento siguiente. Si no entra, lanza
+   * `TimeBudgetExhaustedError` sin enviar ni dormir.
+   */
+  budget?: TimeBudget;
 }
 
 export interface JsonResponse {
@@ -101,7 +110,12 @@ function isQuotaExceeded(text: string): boolean {
   if (!parsed.ok || typeof parsed.value !== 'object' || parsed.value === null) return false;
   const body = parsed.value as Record<string, unknown>;
   // Spotify distingue cuota (no se recupera esperando segundos) de rate limit.
-  return body.reason === 'QUOTA_EXCEEDED';
+  if (body.reason === 'QUOTA_EXCEEDED') return true;
+  // OpenAI informa la cuota agotada como `insufficient_quota` en `error.code` o `error.type`.
+  const error = body.error;
+  if (typeof error !== 'object' || error === null) return false;
+  const { code, type } = error as Record<string, unknown>;
+  return code === 'insufficient_quota' || type === 'insufficient_quota';
 }
 
 /**
@@ -119,11 +133,13 @@ export async function requestJson(
     sleep = defaultSleep,
     random = Math.random,
     beforeAttempt,
+    budget,
   }: HttpDependencies = {},
 ): Promise<JsonResponse> {
   for (let attempt = 0; ; attempt += 1) {
     // Fuera del try: lo que lance el guard no es un fallo HTTP reintentable.
     beforeAttempt?.(0);
+    budget?.ensure(policy.timeoutMs, description);
     const backoff = Math.min(policy.maxDelayMs, policy.baseDelayMs * 2 ** attempt);
     const jittered = Math.round(backoff * (0.5 + random() / 2));
     let failure: HttpError;
@@ -189,6 +205,7 @@ export async function requestJson(
     const delayMs = Math.max(jittered, failure.retryAfterMs ?? 0);
     // Si esperar agota el presupuesto, se aborta ahora: sin dormir ni reenviar.
     beforeAttempt?.(delayMs);
+    budget?.ensure(delayMs + policy.timeoutMs, description);
     await sleep(delayMs);
   }
 }

@@ -12,6 +12,7 @@ import {
 } from '../../src/spotify/authorization.ts';
 import { SpotifyAuthError } from '../../src/spotify/errors.ts';
 import { HttpError, type HttpPolicy } from '../../src/shared/resilient-fetch.ts';
+import { createTimeBudget, TimeBudgetExhaustedError } from '../../src/shared/time-budget.ts';
 
 const policy: HttpPolicy = {
   timeoutMs: 1000,
@@ -298,4 +299,49 @@ describe('autorización inicial del dueño', () => {
       expect(error).not.toBeInstanceOf(SpotifyAuthError);
     },
   );
+});
+
+describe('presupuesto de tiempo en el token', () => {
+  it('un presupuesto agotado sale tal cual, sin envolverse como SpotifyAuthError', async () => {
+    const fetchMock = fetchOf([token({ access_token: 'T1', expires_in: 3600 })]);
+    const provider = createClientCredentialsProvider({
+      clientId: 'id',
+      clientSecret: 'secret',
+      policy,
+      http: http(fetchMock),
+    });
+    const budget = createTimeBudget({ deadlineMs: 500, reserveMs: 0, now: () => 0 });
+
+    const error: unknown = await provider.getAccessToken({ budget }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TimeBudgetExhaustedError);
+    expect(error).not.toBeInstanceOf(SpotifyAuthError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('con tiempo suficiente obtiene el token y lo reutiliza sin consultar el presupuesto', async () => {
+    const fetchMock = fetchOf([token({ access_token: 'T1', expires_in: 3600 })]);
+    const provider = createClientCredentialsProvider({
+      clientId: 'id',
+      clientSecret: 'secret',
+      policy,
+      http: http(fetchMock),
+    });
+    const budget = createTimeBudget({ deadlineMs: 100_000, reserveMs: 0, now: () => 0 });
+    await expect(provider.getAccessToken({ budget })).resolves.toBe('T1');
+    const spent = createTimeBudget({ deadlineMs: 0, reserveMs: 0, now: () => 1 });
+    await expect(provider.getAccessToken({ budget: spent })).resolves.toBe('T1');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('un fallo real de autenticación sigue siendo SpotifyAuthError', async () => {
+    const fetchMock = fetchOf([token({ error: 'invalid_client' }, 401)]);
+    const provider = createClientCredentialsProvider({
+      clientId: 'id',
+      clientSecret: 'secret',
+      policy,
+      http: http(fetchMock),
+    });
+    const budget = createTimeBudget({ deadlineMs: 100_000, reserveMs: 0, now: () => 0 });
+    await expect(provider.getAccessToken({ budget })).rejects.toBeInstanceOf(SpotifyAuthError);
+  });
 });

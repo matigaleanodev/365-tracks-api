@@ -1,5 +1,6 @@
 import type { MusicSelector } from '../music-selection/index.ts';
 import type { IsoDate } from '../shared/dates.ts';
+import type { TimeBudget } from '../shared/time-budget.ts';
 import type { SpotifyClient } from '../spotify/index.ts';
 import { findIncompleteFields, IncompleteTrackError } from './completeness.ts';
 import type { TrackRepository } from './repository.ts';
@@ -11,6 +12,17 @@ export interface GenerateDailyTrackDependencies {
   spotify: SpotifyClient;
   now: () => Date;
 }
+
+export interface GenerateDailyTrackOptions {
+  /** Presupuesto de la invocación; sin él no hay límite de tiempo propio (scripts). */
+  budget?: TimeBudget;
+}
+
+/**
+ * Tiempo estimado de la escritura condicional (transacción DynamoDB con reintentos del SDK).
+ * Sin él disponible hasta el límite duro no se escribe: la fecha queda libre para la próxima.
+ */
+export const PERSIST_COST_MS = 10_000;
 
 export interface GenerateDailyTrackResult {
   status: 'created' | 'already-exists';
@@ -24,6 +36,7 @@ export interface GenerateDailyTrackResult {
 export async function generateDailyTrack(
   { repository, selector, spotify, now }: GenerateDailyTrackDependencies,
   date: IsoDate,
+  { budget }: GenerateDailyTrackOptions = {},
 ): Promise<GenerateDailyTrackResult> {
   const existing = await repository.getByDate(date);
   if (existing) {
@@ -35,6 +48,7 @@ export async function generateDailyTrack(
       { repository, selector, spotify, now },
       date,
       attempt === MAX_ATTEMPTS,
+      budget,
     );
     if (result) return result;
   }
@@ -48,9 +62,11 @@ async function selectAndStore(
   { repository, selector, spotify, now }: GenerateDailyTrackDependencies,
   date: IsoDate,
   last: boolean,
+  budget: TimeBudget | undefined,
 ): Promise<GenerateDailyTrackResult | null> {
-  const selection = await selector.select(date);
-  const metadata = await spotify.getTrack(selection.spotifyTrackId);
+  const options = budget === undefined ? {} : { budget };
+  const selection = await selector.select(date, options);
+  const metadata = await spotify.getTrack(selection.spotifyTrackId, options);
 
   const track: DailyTrack = {
     date,
@@ -75,6 +91,8 @@ async function selectAndStore(
     throw new IncompleteTrackError(date, incomplete);
   }
 
+  // Sin tiempo para persistir no se escribe nada (la reserva ya no aplica: es para esto).
+  budget?.ensure(PERSIST_COST_MS, 'persisting the selected track', { useReserve: false });
   const outcome = await repository.create(track);
   if (outcome === 'created') {
     return { status: 'created', track };

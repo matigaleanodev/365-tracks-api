@@ -139,6 +139,23 @@ describe('Tracks365ApiStack', () => {
     );
   });
 
+  it.each([
+    [{ scheduleEnabled: false, playlistScheduleEnabled: false }, 'DISABLED', 'DISABLED'],
+    [{ scheduleEnabled: true, playlistScheduleEnabled: false }, 'ENABLED', 'DISABLED'],
+    [{ scheduleEnabled: false, playlistScheduleEnabled: true }, 'DISABLED', 'ENABLED'],
+    [{ scheduleEnabled: true, playlistScheduleEnabled: true }, 'ENABLED', 'ENABLED'],
+  ])('cada Scheduler refleja solo su flag %j', (flags, daily, playlist) => {
+    const template = synth({ ...baseConfig, ...flags });
+    template.hasResourceProperties('AWS::Scheduler::Schedule', {
+      Name: SCHEDULE_NAME,
+      State: daily,
+    });
+    template.hasResourceProperties('AWS::Scheduler::Schedule', {
+      Name: PLAYLIST_SCHEDULE_NAME,
+      State: playlist,
+    });
+  });
+
   it('acota el timeout y los parámetros de las Lambdas de música', () => {
     const template = synth();
     template.hasResourceProperties('AWS::Lambda::Function', {

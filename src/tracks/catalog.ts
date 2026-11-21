@@ -1,3 +1,4 @@
+import { TimeBudgetExhaustedError, type TimeBudget } from '../shared/time-budget.ts';
 import { addDays, getEditorialDate, type IsoDate } from '../shared/dates.ts';
 import { findIncompleteFields } from './completeness.ts';
 import { generateDailyTrack, type GenerateDailyTrackDependencies } from './generate-daily-track.ts';
@@ -68,6 +69,8 @@ export interface ReplenishBudget {
   maxNew?: number;
   /** Se consulta antes de cada fecha; false corta la ejecución antes de que venza la Lambda. */
   hasTimeLeft?: () => boolean;
+  /** Presupuesto de la invocación: se propaga a OpenAI, Spotify y la persistencia. */
+  budget?: TimeBudget;
 }
 
 export interface ReplenishReport {
@@ -80,6 +83,8 @@ export interface ReplenishReport {
   incomplete: IsoDate[];
   /** Pendientes por presupuesto: avance normal, no es un error. */
   deferred: IsoDate[];
+  /** El tiempo se agotó a mitad de una fecha: esa y las siguientes quedaron diferidas, sin escribir nada. */
+  budgetExhausted: boolean;
   /** Fechas que siguen sin canción al terminar (fallidas, omitidas o diferidas). */
   stillMissing: IsoDate[];
   outcomes: ReplenishOutcome[];
@@ -96,11 +101,12 @@ export interface ReplenishReport {
 export async function replenishCatalog(
   dependencies: GenerateDailyTrackDependencies,
   window: readonly IsoDate[] = getCatalogWindow(dependencies.now()),
-  { maxNew = Number.POSITIVE_INFINITY, hasTimeLeft = () => true }: ReplenishBudget = {},
+  { maxNew = Number.POSITIVE_INFINITY, hasTimeLeft = () => true, budget }: ReplenishBudget = {},
 ): Promise<ReplenishReport> {
   const status = await getCatalogStatus(dependencies.repository, window);
   const outcomes: ReplenishOutcome[] = [];
   let halted = false;
+  let budgetExhausted = false;
   let attempted = 0;
 
   for (const date of status.missing) {
@@ -108,15 +114,25 @@ export async function replenishCatalog(
       outcomes.push({ date, status: 'skipped' });
       continue;
     }
-    if (attempted >= maxNew || !hasTimeLeft()) {
+    if (budgetExhausted || attempted >= maxNew || !hasTimeLeft()) {
       outcomes.push({ date, status: 'deferred' });
       continue;
     }
     attempted += 1;
     try {
-      const { status: result } = await generateDailyTrack(dependencies, date);
+      const { status: result } = await generateDailyTrack(
+        dependencies,
+        date,
+        budget === undefined ? {} : { budget },
+      );
       outcomes.push({ date, status: result });
     } catch (error) {
+      if (error instanceof TimeBudgetExhaustedError) {
+        // Avance normal y reanudable: nada se escribió para esta fecha.
+        budgetExhausted = true;
+        outcomes.push({ date, status: 'deferred' });
+        continue;
+      }
       halted = true;
       outcomes.push({
         date,
@@ -136,6 +152,7 @@ export async function replenishCatalog(
     created: datesWith('created'),
     incomplete: status.incomplete,
     deferred: datesWith('deferred'),
+    budgetExhausted,
     stillMissing: datesWith('failed', 'skipped', 'deferred'),
     outcomes,
   };

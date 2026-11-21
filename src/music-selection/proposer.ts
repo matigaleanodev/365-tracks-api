@@ -1,4 +1,5 @@
 import type { IsoDate } from '../shared/dates.ts';
+import type { TimeBudget } from '../shared/time-budget.ts';
 import { requestJson, type HttpDependencies, type HttpPolicy } from '../shared/resilient-fetch.ts';
 import { CRITERION_BRIEF, type EditorialCriterion } from './criteria.ts';
 import type { DiversityTargets } from './diversity.ts';
@@ -36,8 +37,12 @@ export interface ProposalRequest {
   rejected: readonly RejectedProposal[];
 }
 
+export interface ProposeOptions {
+  budget?: TimeBudget;
+}
+
 export interface SongProposer {
-  propose(request: ProposalRequest): Promise<SongProposal[]>;
+  propose(request: ProposalRequest, options?: ProposeOptions): Promise<SongProposal[]>;
 }
 
 /** La respuesta del modelo no sirve (rechazo, truncada, JSON o forma inválidos). Se reintenta. */
@@ -194,7 +199,7 @@ export function createOpenAiProposer({
   url = OPENAI_RESPONSES_URL,
 }: OpenAiProposerOptions): SongProposer {
   return {
-    async propose(request) {
+    async propose(request, { budget }: ProposeOptions = {}) {
       const { json } = await requestJson(
         'OpenAI proposal',
         url,
@@ -220,7 +225,7 @@ export function createOpenAiProposer({
           }),
         },
         policy,
-        http,
+        budget === undefined ? http : { ...http, budget },
       );
       return parseProposals(extractOutputText(json), request.criterion);
     },

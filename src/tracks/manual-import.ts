@@ -1,3 +1,5 @@
+import { buildHistory, findViolation, identityOf } from '../music-selection/rules.ts';
+import { conflictMessage } from './manual-load.ts';
 import { readAllTracks } from './read-all.ts';
 import type { TrackRepository } from './repository.ts';
 import { parseTrackInput } from './track-input.ts';
@@ -22,7 +24,10 @@ export interface ImportRecordResult {
 }
 
 export interface ImportReport {
-  /** false si el lote se abortó: en ese caso no se escribió nada. */
+  /**
+   * false si el lote se abortó antes de escribir (no se escribió nada) o si, ya escribiendo, una
+   * ejecución concurrente ocupó alguna canción o artista (ese registro queda en `conflict`).
+   */
   ok: boolean;
   records: ImportRecordResult[];
   /** Errores del archivo completo (no de un registro). */
@@ -117,12 +122,9 @@ export async function importTracks({ raw, now, repository }: ImportOptions): Pro
   if (records.some((record) => record.status !== 'valid')) {
     return abort();
   }
-  if (!repository) {
-    return { ok: true, records, errors: [] };
-  }
-
-  // Contra el catálogo guardado: una canción no puede repetirse en otra fecha.
-  const stored = await readAllTracks(repository);
+  // Contra el catálogo guardado (si hay repositorio): una canción no puede repetirse en otra fecha.
+  // Sin repositorio (dry-run) se aplican igual las reglas internas del archivo.
+  const stored = repository ? await readAllTracks(repository) : [];
   const dateById = new Map(stored.map((track) => [track.spotifyTrackId, track.date]));
   const storedDates = new Set(stored.map((track) => track.date));
   for (const [index, track] of tracks) {
@@ -137,15 +139,43 @@ export async function importTracks({ raw, now, repository }: ImportOptions): Pro
       record.errors.push(`spotifyTrackId ${track.spotifyTrackId} is already used on ${usedOn}`);
     }
   }
+  // Mismas reglas que la selección (grabación repetida, artista a menos de 60 días), contra lo
+  // guardado y contra el resto del archivo, en orden de fecha.
+  const history = buildHistory(stored);
+  const pending = [...tracks].sort(([, a], [, b]) => a.date.localeCompare(b.date));
+  for (const [index, track] of pending) {
+    const record = records[index]!;
+    if (record.status !== 'valid') continue;
+    const violation = findViolation(identityOf(track), track.date, history);
+    if (violation) {
+      record.status = 'conflict';
+      record.errors.push(conflictMessage(violation));
+    } else {
+      const next = buildHistory([track]);
+      next.trackIds.forEach((id) => history.trackIds.add(id));
+      next.recordings.forEach((key) => history.recordings.add(key));
+      history.artists.push(...next.artists);
+    }
+  }
   if (records.some((record) => record.status === 'conflict')) {
     return abort();
+  }
+  if (!repository) {
+    return { ok: true, records, errors: [] };
   }
 
   for (const [index, track] of tracks) {
     const record = records[index]!;
     if (record.status === 'already-exists') continue;
     // La escritura es condicional: una carrera con otra ejecución nunca pisa la fecha.
-    record.status = (await repository.create(track)) === 'created' ? 'created' : 'already-exists';
+    const outcome = await repository.create(track);
+    if (outcome === 'created' || outcome === 'already-exists') {
+      record.status = outcome;
+    } else {
+      // Una ejecución concurrente ocupó la canción o el artista después de validar.
+      record.status = 'conflict';
+      record.errors.push(conflictMessage(outcome));
+    }
   }
-  return { ok: true, records, errors: [] };
+  return { ok: !records.some((record) => record.status === 'conflict'), records, errors: [] };
 }

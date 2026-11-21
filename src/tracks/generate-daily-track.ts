@@ -30,6 +30,25 @@ export async function generateDailyTrack(
     return { status: 'already-exists', track: existing };
   }
 
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    const result = await selectAndStore(
+      { repository, selector, spotify, now },
+      date,
+      attempt === MAX_ATTEMPTS,
+    );
+    if (result) return result;
+  }
+  throw new Error(`Track for ${date} could not be stored`);
+}
+
+/** Intentos si otra ejecución ocupó la canción o el artista entre la selección y la escritura. */
+const MAX_ATTEMPTS = 3;
+
+async function selectAndStore(
+  { repository, selector, spotify, now }: GenerateDailyTrackDependencies,
+  date: IsoDate,
+  last: boolean,
+): Promise<GenerateDailyTrackResult | null> {
   const selection = await selector.select(date);
   const metadata = await spotify.getTrack(selection.spotifyTrackId);
 
@@ -56,8 +75,16 @@ export async function generateDailyTrack(
     throw new IncompleteTrackError(date, incomplete);
   }
 
-  if ((await repository.create(track)) === 'created') {
+  const outcome = await repository.create(track);
+  if (outcome === 'created') {
     return { status: 'created', track };
+  }
+  if (outcome !== 'already-exists') {
+    // Una ejecución concurrente ocupó esa canción o artista: se vuelve a seleccionar con el
+    // catálogo actualizado. Nada se guardó, así que no queda rastro de la elegida.
+    if (last)
+      throw new Error(`Track for ${date} conflicts with a concurrent selection (${outcome})`);
+    return null;
   }
   const winner = await repository.getByDate(date);
   if (!winner) {

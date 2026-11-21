@@ -2,7 +2,7 @@
 //   node scripts/load-track.ts --file cancion.json --dry-run        (un objeto JSON)
 //   node scripts/load-track.ts --file mes.json --dry-run            (un array JSON: varias fechas)
 //   AWS_PROFILE=<perfil> node scripts/load-track.ts --file mes.json
-// `--file -` lee el JSON de la entrada estándar. Ver DEPLOYMENT.md.
+// `--file -` lee el JSON de la entrada estándar.
 import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
@@ -74,6 +74,11 @@ if (result.status === 'invalid') {
   console.error(
     `Invalid track (nothing written):\n${result.errors.map((e) => `- ${e}`).join('\n')}`,
   );
+  process.exit(1);
+}
+
+if (result.status === 'conflict') {
+  console.error(`Conflict (nothing written):\n${result.errors.map((e) => `- ${e}`).join('\n')}`);
   process.exit(1);
 }
 

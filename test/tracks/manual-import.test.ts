@@ -12,7 +12,7 @@ const spotifyId = (n: number) => `track${String(n).padStart(17, '0')}`;
 const input = (n: number, overrides: Record<string, unknown> = {}) => ({
   date: `2027-01-${String(n).padStart(2, '0')}`,
   title: `Song ${n}`,
-  artist: 'Artist',
+  artist: `Artist ${n}`,
   album: 'Album',
   releaseYear: 1991,
   spotifyTrackId: spotifyId(n),
@@ -38,6 +38,20 @@ describe('importTracks', () => {
     const report = await importTracks({ raw: month(), now: NOW });
     expect(report.ok).toBe(true);
     expect(statuses(report).every((status) => status === 'valid')).toBe(true);
+  });
+
+  it('el dry-run también detecta artista repetido y grabación repetida dentro del archivo', async () => {
+    const sameArtist = await importTracks({
+      raw: [input(1), input(2, { artist: 'Artist 1' })],
+      now: NOW,
+    });
+    expect(sameArtist.ok).toBe(false);
+    expect(statuses(sameArtist)).toEqual(['not-written', 'conflict']);
+    const sameRecording = await importTracks({
+      raw: [input(1), input(2, { title: 'Song 1', artist: 'Artist 1', date: '2027-09-01' })],
+      now: NOW,
+    });
+    expect(statuses(sameRecording)).toEqual(['not-written', 'conflict']);
   });
 
   it('exige un array no vacío y acotado', async () => {
@@ -145,6 +159,8 @@ describe('importTracks', () => {
         ...storedTrack(1),
         date: `2027-02-${String(n).padStart(2, '0')}`,
         spotifyTrackId: spotifyId(100 + n),
+        title: `Clone ${n}`,
+        artist: `Clone artist ${n}`,
       });
     }
     const list = vi.spyOn(repository, 'list');

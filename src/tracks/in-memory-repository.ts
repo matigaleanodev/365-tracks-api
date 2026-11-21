@@ -1,3 +1,9 @@
+import {
+  buildHistory,
+  DEFAULT_ARTIST_COOLDOWN_DAYS,
+  findViolation,
+  identityOf,
+} from '../music-selection/rules.ts';
 import type { IsoDate } from '../shared/dates.ts';
 import type {
   CreateTrackResult,
@@ -38,6 +44,14 @@ export class InMemoryTrackRepository implements TrackRepository {
     if (this.#tracks.has(track.date)) {
       return Promise.resolve('already-exists');
     }
+    // Mismas garantías que DynamoTrackRepository: nada duplicado ni artista dentro del intervalo.
+    const violation = findViolation(
+      identityOf(track),
+      track.date,
+      buildHistory([...this.#tracks.values()]),
+      DEFAULT_ARTIST_COOLDOWN_DAYS,
+    );
+    if (violation) return Promise.resolve(violation);
     this.#tracks.set(track.date, track);
     return Promise.resolve('created');
   }

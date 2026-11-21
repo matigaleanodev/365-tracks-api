@@ -49,6 +49,12 @@ export function spotifyTrack(id: string, overrides: Partial<SpotifyTrack> = {}):
   };
 }
 
+/** Artista propio de cada ID: los catálogos de prueba no pueden repetir artista dentro de 60 días. */
+export const ownArtist = (id: string): Partial<SpotifyTrack> => {
+  const artistId = `a${id.slice(-21)}`;
+  return { artist: `Artist ${id}`, artistId, artists: [{ id: artistId, name: `Artist ${id}` }] };
+};
+
 /** Cliente de Spotify falso: `getTrack` devuelve metadatos válidos; `searchTracks`, nada. */
 export function fakeSpotify(overrides: Partial<SpotifyClient> = {}): SpotifyClient {
   return {

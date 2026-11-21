@@ -40,8 +40,44 @@ describe('resolveStackConfig', () => {
     });
   });
 
+  it('el contexto en false gana sobre un entorno heredado en true', () => {
+    const context = (key: string) =>
+      ({ scheduleEnabled: 'false', playlistScheduleEnabled: 'false' })[key];
+    const config = resolveStackConfig(context, {
+      SCHEDULE_ENABLED: 'true',
+      PLAYLIST_SCHEDULE_ENABLED: 'true',
+    });
+    expect(config.scheduleEnabled).toBe(false);
+    expect(config.playlistScheduleEnabled).toBe(false);
+  });
+
+  it('cada flag se resuelve de forma independiente', () => {
+    const only = (key: string) => (k: string) => {
+      if (k === key) return 'true';
+      return k === 'scheduleEnabled' || k === 'playlistScheduleEnabled' ? 'false' : undefined;
+    };
+    const daily = resolveStackConfig(only('scheduleEnabled'), {});
+    expect([daily.scheduleEnabled, daily.playlistScheduleEnabled]).toEqual([true, false]);
+    const playlist = resolveStackConfig(only('playlistScheduleEnabled'), {});
+    expect([playlist.scheduleEnabled, playlist.playlistScheduleEnabled]).toEqual([false, true]);
+  });
+
+  it.each(['TRUE', 'True', '1', 'yes', '', ' '])(
+    'rechaza el valor booleano %j en el contexto',
+    (value) => {
+      const context = (key: string) => (key === 'scheduleEnabled' ? value : undefined);
+      expect(() => resolveStackConfig(context, {})).toThrow(/boolean/);
+      const playlist = (key: string) => (key === 'playlistScheduleEnabled' ? value : undefined);
+      expect(() => resolveStackConfig(playlist, {})).toThrow(/boolean/);
+    },
+  );
+
   it.each([
     [{ PUBLISH_TIME_UTC: '24:00' }, /publish time/],
+    [{ SCHEDULE_ENABLED: 'TRUE' }, /boolean/],
+    [{ PLAYLIST_SCHEDULE_ENABLED: '1' }, /boolean/],
+    [{ PLAYLIST_SCHEDULE_ENABLED: '' }, /boolean/],
+    [{ PLAYLIST_SYNC_TIME_UTC: '00:00' }, /12:00 UTC or later/],
     [{ PUBLISH_TIME_UTC: '6:30' }, /publish time/],
     [{ SCHEDULE_ENABLED: 'yes' }, /boolean/],
     [{ PLAYLIST_SCHEDULE_ENABLED: 'yes' }, /boolean/],
@@ -88,5 +124,46 @@ describe('orígenes CORS', () => {
     expect(workflow).toContain('cors_allowed_origins:');
     expect(workflow).toContain("default: 'http://localhost:4200'");
     expect(workflow).toContain('CORS_ALLOWED_ORIGINS: ${{ inputs.cors_allowed_origins }}');
+  });
+
+  describe('workflow de despliegue: Schedulers', () => {
+    const workflow = readFileSync(
+      new URL('../../.github/workflows/deploy.yml', import.meta.url),
+      'utf8',
+    );
+
+    it.each(['schedule_enabled', 'playlist_schedule_enabled'])(
+      'el input %s es booleano, opcional y false por defecto',
+      (name) => {
+        const block = new RegExp(`^ {6}${name}:\\n(?: {8}.*\\n)+`, 'm').exec(workflow)?.[0];
+        expect(block).toBeDefined();
+        expect(block).toContain('type: boolean');
+        expect(block).toContain('default: false');
+        expect(block).toContain('required: false');
+      },
+    );
+
+    it('pasa ambos estados a CDK como contexto, por entorno y sin interpolar en el script', () => {
+      expect(workflow).toContain('SCHEDULE_ENABLED_INPUT: ${{ inputs.schedule_enabled }}');
+      expect(workflow).toContain(
+        'PLAYLIST_SCHEDULE_ENABLED_INPUT: ${{ inputs.playlist_schedule_enabled }}',
+      );
+      expect(workflow).toContain('-c "scheduleEnabled=$SCHEDULE_ENABLED_INPUT"');
+      expect(workflow).toContain('-c "playlistScheduleEnabled=$PLAYLIST_SCHEDULE_ENABLED_INPUT"');
+      expect(workflow).toContain(
+        'npx cdk synth Tracks365ApiStack "${schedule_context[@]}" --quiet --no-lookups',
+      );
+      expect(workflow).toContain(
+        'unset PUBLISH_TIME_UTC SCHEDULE_ENABLED PLAYLIST_SCHEDULE_ENABLED PLAYLIST_SYNC_TIME_UTC',
+      );
+      // El estado se verifica antes de crear el change set, y el deploy reutiliza el ensamblado verificado.
+      const synth = workflow.indexOf('npx cdk synth Tracks365ApiStack');
+      const check = workflow.indexOf('no coincide con schedule_enabled');
+      const deploy = workflow.indexOf('npx cdk deploy Tracks365ApiStack --app cdk.out');
+      expect(synth).toBeGreaterThan(-1);
+      expect(check).toBeGreaterThan(synth);
+      expect(deploy).toBeGreaterThan(check);
+      expect(workflow.match(/\$\{\{ *inputs\.(schedule|playlist)/g)).toHaveLength(2);
+    });
   });
 });

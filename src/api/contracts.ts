@@ -16,14 +16,24 @@ export interface ErrorResponse {
   };
 }
 
+/** Canción tal como la ve el frontend: sin los campos de uso interno. */
+export type PublicTrack = Omit<DailyTrack, 'spotifyArtistId'>;
+
+export function toPublicTrack({
+  spotifyArtistId: _internal,
+  ...publicTrack
+}: DailyTrack): PublicTrack {
+  return publicTrack;
+}
+
 /** GET /api/tracks/today y GET /api/tracks/:date */
 export interface TrackResponse {
-  data: DailyTrack;
+  data: PublicTrack;
 }
 
 /** GET /api/tracks */
 export interface TrackListResponse {
-  data: DailyTrack[];
+  data: PublicTrack[];
   pagination: {
     limit: number;
     /** Valor opaco para pedir la página siguiente; null si no hay más. */

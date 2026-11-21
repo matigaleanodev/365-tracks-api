@@ -1,11 +1,19 @@
-// Uso: npm run invoke -- GET /api/tracks/today
 import type { APIGatewayProxyEventV2, Context } from 'aws-lambda';
 import { createApiHandler } from '../src/api/app.ts';
 import { createTrackRepository } from '../src/tracks/create-repository.ts';
 
 process.env.USE_DEV_FIXTURES ??= 'true';
 
-const [method = 'GET', target = '/api/tracks/today'] = process.argv.slice(2);
+// Uso: npm run invoke -- GET /api/tracks/today [--now=2027-01-10T12:00:00Z]
+// `--now` fija el reloj del handler (solo local) para probar fechas sin esperar al día real.
+const nowFlag = process.argv.find((arg) => arg.startsWith('--now='));
+const clock = nowFlag ? new Date(nowFlag.slice('--now='.length)) : undefined;
+if (clock && Number.isNaN(clock.getTime())) {
+  throw new Error('--now must be an ISO 8601 instant, e.g. 2027-01-10T12:00:00Z');
+}
+const [method = 'GET', target = '/api/tracks/today'] = process.argv
+  .slice(2)
+  .filter((arg) => !arg.startsWith('--'));
 const url = new URL(target, 'http://localhost');
 
 const event = {
@@ -22,9 +30,12 @@ const event = {
   isBase64Encoded: false,
 } as unknown as APIGatewayProxyEventV2;
 
+const now = () => clock ?? new Date();
 const handler = createApiHandler({
-  repository: createTrackRepository(process.env, new Date()),
-  now: () => new Date(),
+  repository: createTrackRepository(process.env, now()),
+  now,
+  // Las fixtures se generan alrededor de hoy: antes del lanzamiento la regla pública las ocultaría.
+  ...(process.env.TRACKS_TABLE_NAME ? {} : { publicationStartDate: '1970-01-01' }),
 });
 const context = {
   awsRequestId: 'local-invoke',

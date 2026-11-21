@@ -1,4 +1,5 @@
 import { getEditorialDate, isIsoDate } from '../shared/dates.ts';
+import { DISABLED_CRITERIA } from '../music-selection/criteria.ts';
 import { findDescriptionIssues } from './description.ts';
 import { PUBLICATION_START_DATE } from './publication.ts';
 import type { DailyTrack } from './types.ts';
@@ -67,6 +68,9 @@ export function parseTrackInput(raw: unknown, now: Date): TrackInputResult {
   const [title, artist, album, selectionCriterion] = REQUIRED_TEXT.map((field) =>
     text(field, true),
   );
+  if (selectionCriterion !== undefined && DISABLED_CRITERIA.some((c) => c === selectionCriterion)) {
+    errors.push('selectionCriterion: this criterion is disabled; use "manual" or another label');
+  }
   // Sin descripción válida la canción no está preparada: también se exige en la carga manual.
   const description = text('description', true);
   if (description !== undefined) {

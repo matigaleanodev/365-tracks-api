@@ -24,7 +24,6 @@ const proposal = (title: string, artist: string, overrides: Partial<SongProposal
   title,
   artist,
   releaseYear: 1990,
-  releaseDate: null,
   description: DESCRIPTION,
   ...overrides,
 });
@@ -220,26 +219,19 @@ describe('createEditorialSelector', () => {
     expect(serialized).not.toContain('open.spotify.com');
   });
 
-  it('con una efeméride exige que Spotify confirme el día exacto', async () => {
-    const proposer = scriptedProposer([
-      [proposal('Wrong Day', 'Band W', { releaseDate: '1990-03-15' })],
-    ]);
-    const spotify = catalogSpotify([{ title: 'Wrong Day', artist: 'Band W', n: 1 }]); // 06-01
+  it('nunca pide efemérides: el álbum no prueba la fecha original', async () => {
+    const proposer = scriptedProposer([[proposal('Any Day', 'Band W')]]);
+    const spotify = catalogSpotify([{ title: 'Any Day', artist: 'Band W', n: 1 }]);
     const selector = createEditorialSelector({
       proposer,
       spotify,
       repository: new InMemoryTrackRepository(),
-      // Solo el criterio de aniversario, para aislar la regla.
-      weights: {
-        classic: 0,
-        'hidden-gem': 0,
-        'music-anniversary': 1,
-        'genre-exploration': 0,
-        'recent-release': 0,
-        'cultural-date': 0,
-      },
       maxRoundsPerCriterion: 1,
     });
-    await expect(selector.select(DATE)).rejects.toBeInstanceOf(SelectionFailedError);
+    const selected = await selector.select(DATE);
+    expect(selected.selectionCriterion).not.toBe('music-anniversary');
+    for (const [request] of proposer.propose.mock.calls) {
+      expect(request.criterion).not.toBe('music-anniversary');
+    }
   });
 });

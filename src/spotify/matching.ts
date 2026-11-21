@@ -1,4 +1,3 @@
-import type { IsoDate } from '../shared/dates.ts';
 import type { SpotifyTrack } from './index.ts';
 
 /** Propuesta editorial que hay que resolver contra el catálogo real de Spotify. */
@@ -6,8 +5,6 @@ export interface MatchProposal {
   title: string;
   artist: string;
   releaseYear: number;
-  /** Fecha completa de lanzamiento que el modelo afirma; solo se usa para efemérides. */
-  releaseDate?: string | null;
 }
 
 export type MatchRejection =
@@ -16,17 +13,10 @@ export type MatchRejection =
   | 'title-mismatch'
   | 'wrong-version'
   | 'ambiguous'
-  | 'year-mismatch'
-  | 'anniversary-unverified';
+  | 'year-mismatch';
 
 export type MatchResult =
   { status: 'matched'; track: SpotifyTrack } | { status: 'rejected'; reason: MatchRejection };
-
-export interface MatchOptions {
-  /** Fecha editorial de la canción: las efemérides se verifican contra su mes y día. */
-  editorialDate: IsoDate;
-  requireAnniversary: boolean;
-}
 
 /** Diferencia de años tolerada entre lo que afirma el modelo y lo que informa Spotify. */
 const YEAR_TOLERANCE = 1;
@@ -62,10 +52,6 @@ export function coreTitle(title: string): string {
 
 const LIVE_ALBUM = /\b(?:live|en vivo|ao vivo)\b/;
 
-function monthDay(date: string): string {
-  return date.slice(5, 10);
-}
-
 /**
  * Decide si alguno de los resultados de Spotify es, sin dudas, la canción propuesta.
  * Las dudas se rechazan: es preferible pedir otra propuesta que guardar una coincidencia
@@ -74,7 +60,6 @@ function monthDay(date: string): string {
 export function matchProposal(
   results: readonly SpotifyTrack[],
   proposal: MatchProposal,
-  { editorialDate, requireAnniversary }: MatchOptions,
 ): MatchResult {
   const reject = (reason: MatchRejection): MatchResult => ({ status: 'rejected', reason });
   if (results.length === 0) return reject('no-results');
@@ -107,19 +92,7 @@ export function matchProposal(
   );
   if (nearYear.length === 0) return reject('year-mismatch');
 
-  let candidates = nearYear;
-  if (requireAnniversary) {
-    const claimed = proposal.releaseDate;
-    candidates = nearYear.filter(
-      (track) =>
-        typeof claimed === 'string' &&
-        track.releaseDatePrecision === 'day' &&
-        track.releaseDate === claimed &&
-        monthDay(claimed) === monthDay(editorialDate) &&
-        Number(claimed.slice(0, 4)) < Number(editorialDate.slice(0, 4)),
-    );
-    if (candidates.length === 0) return reject('anniversary-unverified');
-  }
+  const candidates = nearYear;
 
   // Misma grabación en varios lanzamientos: año exacto, luego álbum/single, luego el más antiguo.
   const rank = (track: SpotifyTrack) => [

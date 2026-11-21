@@ -10,6 +10,7 @@
       "Resource": [
         "arn:aws:iam::650387442642:role/tracks365-http",
         "arn:aws:iam::650387442642:role/tracks365-generate",
+        "arn:aws:iam::650387442642:role/tracks365-playlist",
         "arn:aws:iam::650387442642:role/tracks365-scheduler",
         "arn:aws:iam::650387442642:role/tracks365-cloudformation",
         "arn:aws:iam::650387442642:role/tracks365-prepare",
@@ -38,6 +39,7 @@
       "Resource": [
         "arn:aws:iam::650387442642:role/tracks365-http",
         "arn:aws:iam::650387442642:role/tracks365-generate",
+        "arn:aws:iam::650387442642:role/tracks365-playlist",
         "arn:aws:iam::650387442642:role/tracks365-scheduler",
         "arn:aws:iam::650387442642:role/tracks365-cloudformation",
         "arn:aws:iam::650387442642:role/tracks365-prepare",

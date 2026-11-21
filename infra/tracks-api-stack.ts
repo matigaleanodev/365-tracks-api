@@ -12,8 +12,10 @@ import type { StackConfig } from './config.ts';
 import {
   API_NAME,
   FUNCTIONS,
+  PLAYLIST_SCHEDULE_NAME,
   roleArn,
   SCHEDULE_NAME,
+  SSM_PREFIX,
   TABLE_NAME,
   type RoleName,
 } from './delivery.ts';
@@ -21,6 +23,7 @@ import {
 export interface LambdaCode {
   api: lambda.Code;
   generateDailyTrack: lambda.Code;
+  syncPlaylist: lambda.Code;
 }
 
 export interface Tracks365ApiStackProps extends StackProps {
@@ -43,6 +46,7 @@ export class Tracks365ApiStack extends Stack {
     const code = props.code ?? {
       api: builtCode('api'),
       generateDailyTrack: builtCode('generate-daily-track'),
+      syncPlaylist: builtCode('sync-playlist'),
     };
 
     // Un ítem por fecha: pk constante + sk = fecha. Permite GetItem por fecha, Query ordenado
@@ -78,13 +82,32 @@ export class Tracks365ApiStack extends Stack {
       logGroup: this.logGroup('ApiLogs', FUNCTIONS.http),
     });
 
+    // Reposición del catálogo. Cada fecha requiere llamadas a OpenAI y a Spotify con reintentos,
+    // así que una invocación no intenta las 30: procesa un tope de fechas (CATALOG_MAX_NEW_PER_RUN)
+    // y corta antes de vencer. 300 s deja margen para varias fechas con reintentos.
     const generateFunction = new lambda.Function(this, 'GenerateDailyTrackFunction', {
       ...commonFunctionProps,
       functionName: FUNCTIONS.generate,
       code: code.generateDailyTrack,
-      timeout: Duration.seconds(60),
+      timeout: Duration.seconds(300),
+      environment: {
+        ...commonFunctionProps.environment,
+        SSM_PARAMETER_PREFIX: SSM_PREFIX,
+        CATALOG_MAX_NEW_PER_RUN: '5',
+      },
       role: this.importRole('GenerateDailyTrackRole', 'generate'),
       logGroup: this.logGroup('GenerateDailyTrackLogs', FUNCTIONS.generate),
+    });
+
+    // Sincronización de la playlist histórica: proceso independiente, con su propio rol.
+    const playlistFunction = new lambda.Function(this, 'SyncPlaylistFunction', {
+      ...commonFunctionProps,
+      functionName: FUNCTIONS.playlist,
+      code: code.syncPlaylist,
+      timeout: Duration.seconds(120),
+      environment: { ...commonFunctionProps.environment, SSM_PARAMETER_PREFIX: SSM_PREFIX },
+      role: this.importRole('SyncPlaylistRole', 'playlist'),
+      logGroup: this.logGroup('SyncPlaylistLogs', FUNCTIONS.playlist),
     });
 
     const httpApi = new apigwv2.HttpApi(this, 'HttpApi', {
@@ -113,7 +136,8 @@ export class Tracks365ApiStack extends Stack {
     const { hour, minute } = config.publishTime;
     new scheduler.CfnSchedule(this, 'DailyTrackSchedule', {
       name: SCHEDULE_NAME,
-      description: 'Dispara la generación de la canción diaria (hora UTC configurable).',
+      description:
+        'Repone las fechas sin canción de la ventana de 30 días (hora UTC configurable).',
       scheduleExpression: `cron(${minute} ${hour} * * ? *)`,
       scheduleExpressionTimezone: 'UTC',
       flexibleTimeWindow: { mode: 'OFF' },
@@ -123,6 +147,24 @@ export class Tracks365ApiStack extends Stack {
         roleArn: roleArn('scheduler'),
         input: JSON.stringify({ source: 'eventbridge-scheduler' }),
         // El proceso es idempotente: reintentar es seguro, pero se acota el default (24 h).
+        retryPolicy: { maximumRetryAttempts: 2, maximumEventAgeInSeconds: 3600 },
+      },
+    });
+
+    const playlistTime = config.playlistSyncTime;
+    new scheduler.CfnSchedule(this, 'PlaylistSyncSchedule', {
+      name: PLAYLIST_SCHEDULE_NAME,
+      description:
+        'Agrega a la playlist anual las canciones de días ya terminados en todas las zonas (>= 12:00 UTC).',
+      scheduleExpression: `cron(${playlistTime.minute} ${playlistTime.hour} * * ? *)`,
+      scheduleExpressionTimezone: 'UTC',
+      flexibleTimeWindow: { mode: 'OFF' },
+      state: config.playlistScheduleEnabled ? 'ENABLED' : 'DISABLED',
+      target: {
+        arn: playlistFunction.functionArn,
+        roleArn: roleArn('scheduler'),
+        input: JSON.stringify({ source: 'eventbridge-scheduler' }),
+        // Sincronizar es idempotente (lee la playlist antes de agregar): reintentar es seguro.
         retryPolicy: { maximumRetryAttempts: 2, maximumEventAgeInSeconds: 3600 },
       },
     });

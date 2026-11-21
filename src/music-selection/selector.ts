@@ -11,7 +11,7 @@ import {
   type EditorialCriterion,
 } from './criteria.ts';
 import { getDiversityTargets } from './diversity.ts';
-import type { MusicSelector, TrackSelection } from './index.ts';
+import type { MusicSelector, SelectOptions, TrackSelection } from './index.ts';
 import {
   ProposalResponseError,
   type RejectedProposal,
@@ -70,7 +70,7 @@ export function createEditorialSelector({
   maxCriteriaTried = 3,
 }: EditorialSelectorOptions): MusicSelector {
   return {
-    async select(date): Promise<TrackSelection> {
+    async select(date, { budget }: SelectOptions = {}): Promise<TrackSelection> {
       const tracks = await readAllTracks(repository);
       const history = buildHistory(tracks);
       const criteria = rankCriteria(tracks, weights).slice(0, maxCriteriaTried);
@@ -82,6 +82,8 @@ export function createEditorialSelector({
       };
       const considered: RejectedProposal[] = [];
       const seen = new Set<string>();
+
+      const callOptions = budget === undefined ? {} : { budget };
 
       const evaluate = async (
         proposal: SongProposal,
@@ -101,10 +103,12 @@ export function createEditorialSelector({
           return discard('invalid-description');
         }
 
-        const results = await spotify.searchTracks({
-          title: proposal.title,
-          artist: proposal.artist,
-        });
+        // Antes de gastar una búsqueda: si el tiempo no alcanza se corta, no se busca.
+        budget?.ensure(0, 'candidate evaluation');
+        const results = await spotify.searchTracks(
+          { title: proposal.title, artist: proposal.artist },
+          callOptions,
+        );
         const match = matchProposal(results, proposal);
         if (match.status === 'rejected') return discard(match.reason);
 
@@ -121,14 +125,18 @@ export function createEditorialSelector({
       for (const criterion of criteria) {
         for (let round = 0; round < maxRoundsPerCriterion; round += 1) {
           let proposals: SongProposal[];
+          budget?.ensure(0, 'proposal round');
           try {
-            proposals = await proposer.propose({
-              date,
-              criterion,
-              targets,
-              count: candidatesPerRound,
-              rejected: [...considered],
-            });
+            proposals = await proposer.propose(
+              {
+                date,
+                criterion,
+                targets,
+                count: candidatesPerRound,
+                rejected: [...considered],
+              },
+              callOptions,
+            );
           } catch (error) {
             // Una respuesta inservible cuenta como ronda perdida; un fallo de red/cuota no.
             if (error instanceof ProposalResponseError) {
@@ -144,6 +152,7 @@ export function createEditorialSelector({
             seen.add(key);
             considered.push({ title: proposal.title, artist: proposal.artist });
 
+            budget?.ensure(0, 'candidate evaluation');
             const selection = await evaluate(proposal, criterion);
             if (selection !== null) return selection;
           }

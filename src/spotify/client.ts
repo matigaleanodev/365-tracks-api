@@ -10,6 +10,7 @@ import { SpotifyMetadataError, SpotifyTrackNotFoundError } from './errors.ts';
 import type {
   ReleaseDatePrecision,
   SpotifyArtistRef,
+  SpotifyCallOptions,
   SpotifyClient,
   SpotifySearchQuery,
   SpotifyTrack,
@@ -124,20 +125,25 @@ export function createSpotifyClient({
     }
   };
 
-  const get = async (description: string, path: string): Promise<unknown> => {
+  const get = async (
+    description: string,
+    path: string,
+    { budget }: SpotifyCallOptions = {},
+  ): Promise<unknown> => {
+    const authorization = `Bearer ${await tokens.getAccessToken(budget && { budget })}`;
     const { json } = await requestJson(
       description,
       `${baseUrl}${path}`,
-      { headers: { authorization: `Bearer ${await tokens.getAccessToken()}` } },
+      { headers: { authorization } },
       policy,
-      http,
+      budget === undefined ? http : { ...http, budget },
     );
     return json;
   };
 
-  const search = async (q: string): Promise<SpotifyTrack[]> => {
+  const search = async (q: string, options: SpotifyCallOptions): Promise<SpotifyTrack[]> => {
     const params = new URLSearchParams({ q, type: 'track', limit: String(SEARCH_LIMIT) });
-    const json = await get('Spotify search', `/search?${params.toString()}`);
+    const json = await get('Spotify search', `/search?${params.toString()}`, options);
     const items = isRecord(json) && isRecord(json.tracks) ? json.tracks.items : undefined;
     if (!Array.isArray(items)) {
       throw new SpotifyMetadataError('a search response');
@@ -149,7 +155,7 @@ export function createSpotifyClient({
   };
 
   return {
-    async getTrack(trackId) {
+    async getTrack(trackId, options = {}) {
       const cached = cache.get(trackId);
       if (cached) return cached;
       if (!SPOTIFY_ID_PATTERN.test(trackId)) {
@@ -157,7 +163,7 @@ export function createSpotifyClient({
       }
       let json: unknown;
       try {
-        json = await get('Spotify get track', `/tracks/${trackId}`);
+        json = await get('Spotify get track', `/tracks/${trackId}`, options);
       } catch (error) {
         if (error instanceof HttpError && error.status === 404) {
           throw new SpotifyTrackNotFoundError(trackId);
@@ -172,15 +178,15 @@ export function createSpotifyClient({
       return track;
     },
 
-    async searchTracks({ title, artist }: SpotifySearchQuery) {
+    async searchTracks({ title, artist }: SpotifySearchQuery, options = {}) {
       const cleanTitle = forFilter(title);
       const cleanArtist = forFilter(artist);
       if (cleanTitle === '' || cleanArtist === '') return [];
 
       // Primero filtros por campo (más precisos); si no devuelven nada, texto libre.
-      let found = await search(`track:"${cleanTitle}" artist:"${cleanArtist}"`);
+      let found = await search(`track:"${cleanTitle}" artist:"${cleanArtist}"`, options);
       if (found.length === 0) {
-        found = await search(`${cleanTitle} ${cleanArtist}`);
+        found = await search(`${cleanTitle} ${cleanArtist}`, options);
       }
       found.forEach(remember);
       return found;

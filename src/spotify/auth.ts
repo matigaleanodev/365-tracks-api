@@ -5,12 +5,17 @@ import {
   type HttpDependencies,
   type HttpPolicy,
 } from '../shared/resilient-fetch.ts';
+import { TimeBudgetExhaustedError, type TimeBudget } from '../shared/time-budget.ts';
 import { SpotifyAuthError } from './errors.ts';
 
 export const SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token';
 
+export interface AccessTokenOptions {
+  budget?: TimeBudget;
+}
+
 export interface AccessTokenProvider {
-  getAccessToken(): Promise<string>;
+  getAccessToken(options?: AccessTokenOptions): Promise<string>;
 }
 
 interface ProviderOptions {
@@ -45,6 +50,8 @@ function parseTokenResponse(json: unknown): { accessToken: string; expiresInMs: 
 }
 
 function toAuthError(error: unknown): never {
+  // Quedarse sin tiempo no es un fallo de autenticación: se propaga tal cual.
+  if (error instanceof TimeBudgetExhaustedError) throw error;
   if (error instanceof HttpError && error.kind === 'client-error') {
     if (error.body.includes('invalid_grant')) {
       throw new SpotifyAuthError(
@@ -66,18 +73,20 @@ function toAuthError(error: unknown): never {
 
 /** Token en memoria con una sola renovación en vuelo aunque haya llamadas concurrentes. */
 function cachedProvider(
-  fetchToken: () => Promise<{ accessToken: string; expiresInMs: number }>,
+  fetchToken: (
+    options: AccessTokenOptions,
+  ) => Promise<{ accessToken: string; expiresInMs: number }>,
   now: () => number,
 ): AccessTokenProvider {
   let token: { value: string; expiresAt: number } | undefined;
   let inFlight: Promise<string> | undefined;
 
   return {
-    getAccessToken() {
+    getAccessToken(options = {}) {
       if (token && now() < token.expiresAt) {
         return Promise.resolve(token.value);
       }
-      inFlight ??= fetchToken()
+      inFlight ??= fetchToken(options)
         .then(({ accessToken, expiresInMs }) => {
           token = { value: accessToken, expiresAt: now() + expiresInMs - EXPIRY_SKEW_MS };
           return accessToken;
@@ -99,7 +108,7 @@ export function createClientCredentialsProvider({
   now = Date.now,
   tokenUrl = SPOTIFY_TOKEN_URL,
 }: ProviderOptions): AccessTokenProvider {
-  return cachedProvider(async () => {
+  return cachedProvider(async ({ budget }) => {
     try {
       const { json } = await requestJson(
         'Spotify token request',
@@ -113,7 +122,7 @@ export function createClientCredentialsProvider({
           body: 'grant_type=client_credentials',
         },
         policy,
-        http,
+        budget === undefined ? http : { ...http, budget },
       );
       return parseTokenResponse(json);
     } catch (error) {

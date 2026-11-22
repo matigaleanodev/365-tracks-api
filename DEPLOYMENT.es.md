@@ -110,3 +110,14 @@ El workflow **deploy** recibe el input `cors_allowed_origins` (default `http://l
 - Cada despliegue define la lista **completa**: para sumar el dominio definitivo del frontend, ejecutá el workflow con `http://localhost:4200,https://<dominio>` (y quitá localhost cuando ya no haga falta). El resumen del run muestra la lista vigente; el change set muestra el cambio en la API.
 
 Probalo con `curl -i -H "Origin: https://<origen>" <url-api>/api/tracks` y buscá `access-control-allow-origin`.
+
+## Señales de salud del catálogo
+
+Cada ejecución de la Lambda de reposición registra un evento JSON `catalog-replenish` (solo fechas y conteos, nunca títulos ni artistas) y devuelve los mismos campos. `status` es `catalog-complete`, `progressed`, `stalled-no-time` (quedaba poco tiempo en la invocación: no se empieza nada y la ejecución termina sin error), `stalled-budget-exhausted` (el tiempo se agotó antes de completar alguna fecha; la ejecución falla) o `failed` (una fecha falló; la ejecución falla). También se informan `incompleteCount`, `missingCount`, `preparedAhead` (fechas completas consecutivas desde el inicio de la ventana, que es ayer en UTC) y `runwayLow` (`preparedAhead` menor que 7).
+
+El stack no incluye recursos de alarma. Cuando se habiliten los schedules, estas condiciones deberían avisar al responsable:
+
+- la Lambda termina con error (`failed` o `stalled-budget-exhausted`), o `stalled-*` se repite en ejecuciones consecutivas;
+- `runwayLow` es `true`;
+- `incompleteCount` es mayor que 0 (las fechas incompletas nunca se reparan solas);
+- ninguna ejecución registró `progressed` ni `catalog-complete` durante más que el intervalo del schedule, o la ventana no avanza cerca de la fecha actual.

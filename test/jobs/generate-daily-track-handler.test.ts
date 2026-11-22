@@ -38,6 +38,35 @@ describe('handler de reposición del catálogo', () => {
       deferred: [],
       budgetExhausted: false,
       stillMissing: [],
+      status: 'catalog-complete',
+      incompleteCount: 0,
+      missingCount: 0,
+      preparedAhead: 30,
+      runwayLow: false,
+    });
+    info.mockRestore();
+  });
+
+  it('con una fecha incompleta informa el conteo y el margen sin fallar', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const window = getCatalogWindow(NOW);
+    const broken = { ...prepared(window[4] as string, 5), description: '' };
+    const handler = createReplenishCatalogHandler({
+      repository: new InMemoryTrackRepository([
+        ...window.filter((_, i) => i !== 4).map((date, i) => prepared(date, i + 1)),
+        broken,
+      ]),
+      selector: notImplementedMusicSelector,
+      spotify: notImplementedSpotifyClient,
+      now: () => NOW,
+    });
+
+    const output = await handler();
+    expect(output).toMatchObject({
+      status: 'catalog-complete',
+      incompleteCount: 1,
+      preparedAhead: 4,
+      runwayLow: true,
     });
     info.mockRestore();
   });
@@ -54,6 +83,14 @@ describe('handler de reposición del catálogo', () => {
     await expect(handler()).rejects.toThrow(
       'Catalog replenishment stopped at 2027-01-01: Music selection is not implemented yet',
     );
+    // El estado queda registrado antes de lanzar.
+    expect(JSON.parse(String(info.mock.calls[0]?.[0]))).toMatchObject({
+      event: 'catalog-replenish',
+      status: 'failed',
+      missingCount: 30,
+      preparedAhead: 0,
+      runwayLow: true,
+    });
     info.mockRestore();
   });
 });
@@ -78,6 +115,16 @@ describe('handler de reposición con presupuesto de la Lambda', () => {
     expect(output.created).toEqual([]);
     expect(output.deferred).toHaveLength(30);
     expect(output.budgetExhausted).toBe(false);
+    expect(output).toMatchObject({
+      status: 'stalled-no-time',
+      missingCount: 30,
+      preparedAhead: 0,
+      runwayLow: true,
+    });
+    expect(JSON.parse(String(vi.mocked(console.info).mock.calls[0]?.[0]))).toMatchObject({
+      event: 'catalog-replenish',
+      status: 'stalled-no-time',
+    });
     expect(world.fetchMock).not.toHaveBeenCalled();
   });
 
@@ -92,9 +139,14 @@ describe('handler de reposición con presupuesto de la Lambda', () => {
     );
     expect(world.countOf('openai')).toBe(2);
     expect(error).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(vi.mocked(console.info).mock.calls[0]?.[0]))).toMatchObject({
+      event: 'catalog-replenish',
+      status: 'stalled-budget-exhausted',
+    });
     const logged = String(error.mock.calls[0]?.[0]);
     expect(JSON.parse(logged)).toMatchObject({
       event: 'catalog-replenish-no-progress',
+      status: 'stalled-budget-exhausted',
       deferred: 30,
       firstDeferred: '2027-01-01',
     });
@@ -110,6 +162,7 @@ describe('handler de reposición con presupuesto de la Lambda', () => {
     expect(output.budgetExhausted).toBe(true);
     expect(output.created).toEqual(['2027-01-01']);
     expect(output.deferred).toHaveLength(29);
+    expect(output).toMatchObject({ status: 'progressed', preparedAhead: 1, runwayLow: true });
     expect(error).not.toHaveBeenCalled();
     // Nada de la fecha interrumpida: solo la creada, completa.
     expect(await expectOnlyCompleteTracks(world.repository)).toHaveLength(1);
@@ -167,6 +220,12 @@ describe('handler de reposición con presupuesto de la Lambda', () => {
     await expect(handler({}, context)).rejects.toThrow(
       /Catalog replenishment stopped at 2027-01-01/,
     );
+    const logged = vi
+      .mocked(console.info)
+      .mock.calls.map((call) => String(call[0]))
+      .join('\n');
+    expect(JSON.parse(logged)).toMatchObject({ status: 'failed' });
+    expect(logged).not.toMatch(/Song \d|Artist \d/);
     expect(await expectOnlyCompleteTracks(world.repository)).toEqual([]);
   });
 

@@ -1,9 +1,10 @@
 import { createTimeBudget, SELECTION_SAFETY_MARGIN_MS } from '../shared/time-budget.ts';
 import { replenishCatalog, type ReplenishReport } from '../tracks/catalog.ts';
+import { classifyCatalogHealth, type CatalogHealth } from '../tracks/catalog-health.ts';
 import type { GenerateDailyTrackDependencies } from '../tracks/generate-daily-track.ts';
 import { createCatalogDependencies } from './dependencies.ts';
 
-export interface CatalogJobOutput {
+export interface CatalogJobOutput extends CatalogHealth {
   from: string;
   to: string;
   preparedBefore: number;
@@ -83,6 +84,7 @@ export function createReplenishCatalogHandler(
       ...(budget && { budget }),
     });
     const output: CatalogJobOutput = {
+      ...classifyCatalogHealth(report),
       from: report.from,
       to: report.to,
       preparedBefore: report.preparedBefore,
@@ -101,6 +103,7 @@ export function createReplenishCatalogHandler(
       console.error(
         JSON.stringify({
           event: 'catalog-replenish-no-progress',
+          status: output.status,
           from: output.from,
           to: output.to,
           deferred: output.deferred.length,

@@ -21,6 +21,26 @@ import {
 import { buildHistory, DEFAULT_ARTIST_COOLDOWN_DAYS, findViolation } from './rules.ts';
 import { recordingKeyOf } from './recording-key.ts';
 
+/**
+ * Eventos de diagnóstico. Solo existen si quien llama pasa `onEvaluation` (el preview local):
+ * producción no lo hace, así que nada de esto llega a los logs.
+ */
+export type SelectionEvaluationEvent =
+  | { type: 'round-started'; criterion: EditorialCriterion; round: number }
+  | { type: 'round-failed'; criterion: EditorialCriterion; reason: 'invalid-response' }
+  | {
+      type: 'discarded';
+      criterion: EditorialCriterion;
+      proposal: SongProposal;
+      reason: string;
+    }
+  | {
+      type: 'accepted';
+      criterion: EditorialCriterion;
+      proposal: SongProposal;
+      spotifyTrackId: string;
+    };
+
 export interface EditorialSelectorOptions {
   proposer: SongProposer;
   spotify: SpotifyClient;
@@ -34,6 +54,8 @@ export interface EditorialSelectorOptions {
   maxRoundsPerCriterion?: number;
   /** Criterios que se prueban como máximo (acota el costo de OpenAI por fecha). */
   maxCriteriaTried?: number;
+  /** Solo diagnóstico (preview local): informa cada ronda y cada propuesta descartada o aceptada. */
+  onEvaluation?: (event: SelectionEvaluationEvent) => void;
 }
 
 /**
@@ -68,6 +90,7 @@ export function createEditorialSelector({
   candidatesPerRound = 6,
   maxRoundsPerCriterion = 2,
   maxCriteriaTried = 3,
+  onEvaluation,
 }: EditorialSelectorOptions): MusicSelector {
   return {
     async select(date, { budget }: SelectOptions = {}): Promise<TrackSelection> {
@@ -91,6 +114,7 @@ export function createEditorialSelector({
       ): Promise<TrackSelection | null> => {
         const discard = (reason: string) => {
           tally(reason);
+          onEvaluation?.({ type: 'discarded', criterion, proposal, reason });
           return null;
         };
         // Primero lo que no cuesta una llamada a Spotify.
@@ -115,6 +139,12 @@ export function createEditorialSelector({
         const violation = findViolation(match.track, date, history, artistCooldownDays);
         if (violation !== null) return discard(violation);
 
+        onEvaluation?.({
+          type: 'accepted',
+          criterion,
+          proposal,
+          spotifyTrackId: match.track.id,
+        });
         return {
           spotifyTrackId: match.track.id,
           selectionCriterion: criterion,
@@ -126,6 +156,7 @@ export function createEditorialSelector({
         for (let round = 0; round < maxRoundsPerCriterion; round += 1) {
           let proposals: SongProposal[];
           budget?.ensure(0, 'proposal round');
+          onEvaluation?.({ type: 'round-started', criterion, round: round + 1 });
           try {
             proposals = await proposer.propose(
               {
@@ -141,6 +172,7 @@ export function createEditorialSelector({
             // Una respuesta inservible cuenta como ronda perdida; un fallo de red/cuota no.
             if (error instanceof ProposalResponseError) {
               tally('invalid-response');
+              onEvaluation?.({ type: 'round-failed', criterion, reason: 'invalid-response' });
               continue;
             }
             throw error;

@@ -27,4 +27,5 @@ export {
   createEditorialSelector,
   SelectionFailedError,
   type EditorialSelectorOptions,
+  type SelectionEvaluationEvent,
 } from './selector.ts';

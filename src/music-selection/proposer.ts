@@ -21,6 +21,12 @@ export interface SongProposal {
    * modelo nunca llega aquí.
    */
   description: string;
+  /**
+   * Solo diagnóstico: motivo y rasgos del vocabulario cerrado con los que se compuso la
+   * descripción. Se completan únicamente si el proposer se crea con `includeTraits`.
+   */
+  reasonId?: string;
+  traits?: readonly string[];
 }
 
 /** Propuesta del propio modelo descartada en esta ejecución; nunca proviene de Spotify. */
@@ -147,7 +153,11 @@ export function extractOutputText(json: unknown): string {
  * rasgos repetidos o en cantidad incorrecta); falla si no queda ninguno. La descripción se
  * compone localmente: cualquier texto libre del modelo se descarta con el candidato.
  */
-export function parseProposals(text: string, criterion: EditorialCriterion): SongProposal[] {
+export function parseProposals(
+  text: string,
+  criterion: EditorialCriterion,
+  { includeTraits = false }: { includeTraits?: boolean } = {},
+): SongProposal[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -176,7 +186,18 @@ export function parseProposals(text: string, criterion: EditorialCriterion): Son
     }
     const description = composeDescription(criterion, reason, traits);
     if (description === null) return [];
-    return [{ title: title.trim(), artist: artist.trim(), releaseYear, description }];
+    const proposal: SongProposal = {
+      title: title.trim(),
+      artist: artist.trim(),
+      releaseYear,
+      description,
+    };
+    if (includeTraits) {
+      // `composeDescription` ya validó que ambos son identificadores del vocabulario.
+      proposal.reasonId = reason as string;
+      proposal.traits = [...(traits as string[])];
+    }
+    return [proposal];
   });
   if (proposals.length === 0) throw new ProposalResponseError('no valid candidates');
   return proposals;
@@ -189,6 +210,8 @@ export interface OpenAiProposerOptions {
   policy?: HttpPolicy;
   http?: HttpDependencies;
   url?: string;
+  /** Solo diagnóstico: conserva motivo y rasgos en cada propuesta (producción no lo usa). */
+  includeTraits?: boolean;
 }
 
 export function createOpenAiProposer({
@@ -197,6 +220,7 @@ export function createOpenAiProposer({
   policy = OPENAI_HTTP_POLICY,
   http = {},
   url = OPENAI_RESPONSES_URL,
+  includeTraits = false,
 }: OpenAiProposerOptions): SongProposer {
   return {
     async propose(request, { budget }: ProposeOptions = {}) {
@@ -227,7 +251,7 @@ export function createOpenAiProposer({
         policy,
         budget === undefined ? http : { ...http, budget },
       );
-      return parseProposals(extractOutputText(json), request.criterion);
+      return parseProposals(extractOutputText(json), request.criterion, { includeTraits });
     },
   };
 }

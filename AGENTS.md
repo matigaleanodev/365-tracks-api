@@ -9,11 +9,14 @@ Si existe un workspace con AGENTS.md en los directorios padre, leerlo explícita
 - TypeScript ESM estricto, Node 24, AWS CDK v2, Lambda ARM64, HTTP API, DynamoDB, EventBridge Scheduler y Middy.
 - Un solo paquete npm (sin workspaces) y un lockfile.
 - src/api: handler Middy, contratos HTTP (contracts.ts), errores y paginación.
-- src/tracks: entidad DailyTrack, puerto TrackRepository y caso de uso generateDailyTrack.
-- src/music-selection y src/spotify: puertos sin implementar; la lógica de negocio no importa clientes de AWS ni de terceros.
+- src/tracks: entidad DailyTrack, puerto TrackRepository, caso de uso generateDailyTrack y ventana del catálogo.
+- src/music-selection (selector editorial; OpenAI solo propone), src/spotify (catálogo, coincidencias, autorización y playlists), src/playlist (corte de elegibilidad y sincronización), src/config (Parameter Store) y src/jobs (handlers y dependencias reales). La lógica de negocio no importa clientes de AWS ni de terceros: entran por interfaces.
 - infra: stack de la API sin IAM propio (roles importados de la fundación, ver DEPLOYMENT.md); cuenta, región y nombres fijos en infra/delivery.ts; las rutas de API Gateway deben coincidir con las de src/api/routes.ts, sin comodines.
-- La fecha editorial es la fecha UTC; el proceso diario debe seguir siendo idempotente por fecha.
-- La API es pública y de solo lectura. Nunca exponer credenciales de Spotify ni de OpenAI al frontend.
+- La fecha editorial identifica a cada canción y no depende del visitante; la visibilidad sí: se calcula con el reloj del servidor y el parámetro `timezone` (IANA, UTC por defecto). Nunca exponer una fecha que aún no empezó en esa zona, ni siquiera por historial o cursor.
+- El catálogo mantiene una ventana móvil de 30 fechas preparadas (`src/tracks/catalog.ts`); la reposición solo completa fechas faltantes con escritura condicional e idempotente por fecha.
+- Nunca enviar datos de Spotify a OpenAI: la comparación y las reglas de repetición son locales. Una canción sin descripción válida no está preparada. La reposición es acotada y reanudable.
+- La playlist anual solo incluye días ya terminados en todas las zonas (desde las 12:00 UTC de D+1), nunca la del día ni futuras; la sincronización lee la playlist real antes de escribir y es independiente de la preparación.
+- La API es pública y de solo lectura. Las credenciales viven en Parameter Store; nunca exponerlas ni registrarlas, ni exponer canciones futuras en logs, endpoints o playlists.
 
 ## Desarrollo y verificación
 

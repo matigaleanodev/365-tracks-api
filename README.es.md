@@ -1,38 +1,24 @@
 # 365-tracks-api
 
-Backend serverless de **365 Tracks** (nombre técnico provisional): una aplicación pública que publica una canción distinta cada día, igual para todos los visitantes, sin cuentas ni personalización.
+Backend serverless de **365 Tracks**: una app pública que publica una canción por día, la misma para todos.
 
 [English](README.md)
 
 ## Arquitectura
 
 ```
-Cliente ──► API Gateway (HTTP API) ──► Lambda api ──► DynamoDB (lectura)
-EventBridge Scheduler ──► Lambda generate-daily-track ──► DynamoDB (escritura condicional)
-                               ├─ music-selection  (puerto, sin implementar)
-                               └─ spotify          (puerto, sin implementar)
+Cliente ──► API Gateway (HTTP API) ──► Lambda api ──► DynamoDB
+EventBridge Scheduler ──► Lambda generate-daily-track ──► DynamoDB
+EventBridge Scheduler ──► Lambda sync-playlist ──► playlist de Spotify
 ```
 
-- `src/api`: handler Middy (router + manejo de errores), contratos HTTP y paginación.
-- `src/tracks`: entidad `DailyTrack`, puerto `TrackRepository` y caso de uso `generateDailyTrack`.
-- `src/music-selection` y `src/spotify`: interfaces de las integraciones futuras; hoy lanzan `NotImplementedError`.
-- `src/jobs`: handler del proceso programado.
-- `infra`: stack CDK `Tracks365ApiStack`, independiente y agnóstico de cuenta y región.
-- La lógica de negocio no importa clientes de AWS ni de terceros; las integraciones entran por interfaces.
+- `src/api`: handler HTTP, contratos, errores y paginación.
+- `src/tracks`: entidad `DailyTrack`, repositorio y preparación de canciones.
+- `src/music-selection`, `src/spotify`, `src/playlist`: selección de canciones, integración con Spotify y playlist anual.
+- `src/config`: acceso a Parameter Store. `src/jobs`: handlers programados.
+- `infra`: stack CDK `Tracks365ApiStack`.
 
-### Fecha editorial
-
-La fecha editorial es la fecha del calendario **UTC** (`YYYY-MM-DD`). `GET /api/tracks/today` usa la fecha UTC del instante de la solicitud. Antes de que el proceso diario publique, `today` responde `404 TRACK_NOT_FOUND`.
-
-### Proceso diario idempotente
-
-`generateDailyTrack(date)` consulta primero si la fecha ya tiene canción; si la tiene, no selecciona ni llama a Spotify. La escritura es condicional (`PutItem` con `attribute_not_exists`) y atómica, por lo que dos ejecuciones simultáneas o un reintento nunca generan dos canciones para la misma fecha.
-
-### Modelo de datos
-
-`DailyTrack` separa campos obligatorios (`date`, `title`, `artist`, `album`, `releaseYear`, `spotifyTrackId`, `spotifyUrl`, `selectionCriterion`, `createdAt`) de opcionales (`coverUrl`, `description`). Los opcionales ausentes se omiten del JSON.
-
-Tabla DynamoDB: partition key `pk` (constante) y sort key `date`. Permite `GetItem` por fecha, `Query` ordenado para el historial y escritura condicional. Facturación on-demand, recuperación a un punto en el tiempo y política de retención al eliminar el stack.
+Una fecha se vuelve pública a las 00:00 de la zona solicitada (`timezone`, IANA, UTC por defecto), nunca antes. La playlist pública anual solo incluye días ya terminados en todas las zonas.
 
 ## API
 
@@ -40,9 +26,11 @@ API pública, de solo lectura y sin autenticación. Rutas explícitas, sin comod
 
 | Método | Ruta                | Descripción                                 |
 | ------ | ------------------- | ------------------------------------------- |
-| GET    | `/api/tracks/today` | Canción de la fecha UTC actual              |
+| GET    | `/api/tracks/today` | Canción de hoy en la zona solicitada        |
 | GET    | `/api/tracks/:date` | Canción de una fecha (`YYYY-MM-DD`)         |
 | GET    | `/api/tracks`       | Historial, más reciente primero, con cursor |
+
+Todas las rutas aceptan `timezone` (opcional): un nombre de zona IANA como `Europe/Madrid`. Sin él rige `UTC`. Define qué fechas ya son públicas para quien consulta: `today` es su fecha local y ni la consulta directa, ni el historial, ni un cursor devuelven una fecha posterior. Se rechazan con `INVALID_QUERY_PARAMETER` los desplazamientos como `+03:00`, las zonas desconocidas y el valor vacío.
 
 Respuestas exitosas:
 
@@ -71,7 +59,7 @@ Errores, siempre con este formato:
 | Código                    | HTTP | Cuándo                                       |
 | ------------------------- | ---- | -------------------------------------------- |
 | `INVALID_DATE`            | 400  | `:date` no es una fecha de calendario válida |
-| `INVALID_QUERY_PARAMETER` | 400  | `limit` o `cursor` inválidos                 |
+| `INVALID_QUERY_PARAMETER` | 400  | `limit`, `cursor` o `timezone` inválidos     |
 | `TRACK_NOT_FOUND`         | 404  | No hay canción para esa fecha                |
 | `ROUTE_NOT_FOUND`         | 404  | Ruta o método inexistente                    |
 | `INTERNAL_ERROR`          | 500  | Error inesperado (sin detalles internos)     |
@@ -80,13 +68,15 @@ Los tipos de los contratos están en `src/api/contracts.ts`.
 
 ## Configuración
 
-Ninguna variable contiene secretos. Las credenciales de Spotify y OpenAI nunca llegan al frontend; cuando se integren se resolverán desde un servicio de secretos en el backend.
+Ninguna variable contiene secretos. Las credenciales de Spotify y OpenAI viven en Parameter Store (SecureString, prefijo `/tracks365`) y solo las leen las Lambdas del backend; ver [DEPLOYMENT.es.md](DEPLOYMENT.es.md).
 
 | Variable (contexto CDK)                       | Default | Descripción                                                                                                         |
 | --------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
-| `CORS_ALLOWED_ORIGINS` (`corsAllowedOrigins`) | vacío   | Orígenes permitidos, separados por coma. Vacío = sin CORS. `*` abre la API                                          |
+| `CORS_ALLOWED_ORIGINS` (`corsAllowedOrigins`) | vacío   | Orígenes permitidos, separados por coma. Vacío = sin CORS. Se rechaza `*`; solo `https` (`http` para localhost)     |
 | `PUBLISH_TIME_UTC` (`publishTimeUtc`)         | `00:00` | Hora UTC (`HH:mm`) en que se dispara el proceso diario                                                              |
-| `SCHEDULE_ENABLED` (`scheduleEnabled`)        | `false` | Habilita el schedule; mantener en `false` hasta tener selección real                                                |
+| `SCHEDULE_ENABLED` (`scheduleEnabled`)        | `false` | Habilita el schedule de reposición del catálogo                                                                     |
+| `PLAYLIST_SYNC_TIME_UTC`                      | `12:30` | Hora UTC de la sincronización de la playlist; debe ser 12:00 o posterior                                            |
+| `PLAYLIST_SCHEDULE_ENABLED`                   | `false` | Habilita el schedule de la playlist, independiente del anterior                                                     |
 | `USE_DEV_FIXTURES`                            | —       | Solo local: `true` sirve canciones ficticias en lugar de un repositorio vacío; se ignora si hay `TRACKS_TABLE_NAME` |
 | `TRACKS_TABLE_NAME`                           | —       | La define el stack en cada Lambda; con ella se usa DynamoDB                                                         |
 
@@ -103,7 +93,9 @@ npm ci                 # instalar dependencias
 npm run lint           # ESLint
 npm run format         # Prettier (escribe); format:check solo verifica
 npm run typecheck      # tsc --noEmit
-npm test               # Vitest
+npm test               # Vitest (tests unitarios, sin Docker)
+npm run test:integration  # repositorio contra DynamoDB Local, ver TESTING.es.md
+npm run preview:selection -- --date=AAAA-MM-DD --simulate  # preview de selección, ver TESTING.es.md
 npm run build          # empaqueta cada Lambda en dist/ con esbuild
 npm run synth          # build + cdk synth (sin lookups ni acceso a AWS)
 npm run check          # lint + format:check + typecheck + test + synth
@@ -117,16 +109,12 @@ npm run invoke -- GET "/api/tracks?limit=2"
 npm run invoke -- GET /api/tracks/2027-02-30
 ```
 
-Invoca el handler real con un evento de API Gateway v2 y datos ficticios, sin AWS ni servidor HTTP.
+Invoca el handler real con un evento de API Gateway v2 y datos ficticios, sin AWS ni servidor HTTP. `--now=<instante ISO>` fija el reloj del handler (solo local).
+
+## Pruebas
+
+Los tests unitarios, las pruebas de integración con DynamoDB Local y el preview de selección están en [TESTING.es.md](TESTING.es.md).
 
 ## Despliegue
 
-El stack de la API no crea ni modifica IAM: los roles de Lambda, Scheduler y del pipeline los crea un stack de fundación aparte, bajo una permissions boundary creada por un administrador. Cuenta, región y nombres de recursos están fijos en `infra/delivery.ts`.
-
-El despliegue es manual (workflows `foundation` y `deploy`, OIDC de GitHub, change set con aprobación de entorno). Prerrequisitos y pasos en [DEPLOYMENT.es.md](DEPLOYMENT.es.md); CI solo valida (lint, formato, tipos, tests, build y ambos synth).
-
-## Limitaciones actuales
-
-- El repositorio DynamoDB se probó con un doble del cliente, no contra una tabla real.
-- La selección musical y la integración con Spotify no están implementadas; el proceso diario falla de forma explícita si se ejecuta sin ellas.
-- Sin integración con OpenAI ni con X/Twitter.
+Prerrequisitos, credenciales y despliegue en [DEPLOYMENT.es.md](DEPLOYMENT.es.md).

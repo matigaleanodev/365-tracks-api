@@ -4,6 +4,22 @@ name: deploy
 # change set; execute (entorno `production`, con revisores) ejecuta ese mismo change set.
 on:
   workflow_dispatch:
+    inputs:
+      cors_allowed_origins:
+        description: 'Orígenes CORS permitidos, separados por coma (lista completa en cada despliegue; sin *). Vacío = sin CORS.'
+        required: false
+        default: 'http://localhost:4200'
+        type: string
+      schedule_enabled:
+        description: 'Habilitar el Scheduler de la reposición diaria del catálogo. Desmarcado = DISABLED (cada despliegue fija el estado).'
+        required: false
+        default: false
+        type: boolean
+      playlist_schedule_enabled:
+        description: 'Habilitar el Scheduler de la sincronización de la playlist anual (12:30 UTC). Desmarcado = DISABLED (cada despliegue fija el estado).'
+        required: false
+        default: false
+        type: boolean
 
 permissions: {}
 
@@ -48,8 +64,34 @@ jobs:
           role-session-name: tracks365-plan-${{ github.run_id }}
       - name: Preparar el change set
         id: change-set
+        env:
+          # Lo lee infra/config.ts al sintetizar; ahí se validan y se rechaza `*`.
+          CORS_ALLOWED_ORIGINS: ${{ inputs.cors_allowed_origins }}
+          # Los inputs viajan por entorno (nunca interpolados en el script) y se entregan a CDK como
+          # contexto, que tiene prioridad sobre cualquier variable heredada.
+          SCHEDULE_ENABLED_INPUT: ${{ inputs.schedule_enabled }}
+          PLAYLIST_SCHEDULE_ENABLED_INPUT: ${{ inputs.playlist_schedule_enabled }}
         run: |
           set -euo pipefail
+          # Estado de los Schedulers: solo `true` o `false`, explícitos en cada despliegue.
+          for value in "$SCHEDULE_ENABLED_INPUT" "$PLAYLIST_SCHEDULE_ENABLED_INPUT"; do
+            [[ "$value" == true || "$value" == false ]] || { echo "Valor booleano inválido: '$value'"; exit 1; }
+          done
+          # Una variable heredada no puede cambiar el estado ni las horas: quedan en los defaults de config.ts.
+          unset PUBLISH_TIME_UTC SCHEDULE_ENABLED PLAYLIST_SCHEDULE_ENABLED PLAYLIST_SYNC_TIME_UTC
+          schedule_context=(-c "scheduleEnabled=$SCHEDULE_ENABLED_INPUT" -c "playlistScheduleEnabled=$PLAYLIST_SCHEDULE_ENABLED_INPUT")
+
+          # Se sintetiza una sola vez y se verifica antes de crear el change set; el deploy usa ese mismo ensamblado.
+          npx cdk synth Tracks365ApiStack "${schedule_context[@]}" --quiet --no-lookups
+          template=cdk.out/Tracks365ApiStack.template.json
+          schedules=$(jq -c '[.Resources[] | select(.Type == "AWS::Scheduler::Schedule") | .Properties | {name: .Name, state: .State, cron: .ScheduleExpression}]' "$template")
+          expected() { if [[ "$1" == true ]]; then echo ENABLED; else echo DISABLED; fi; }
+          [[ "$(jq -r 'length' <<< "$schedules")" == 2 ]] || { echo "Se esperaban 2 Schedulers: $schedules"; exit 1; }
+          daily=$(jq -c 'map(select(.name == "tracks365-daily-track"))[0]' <<< "$schedules")
+          playlist=$(jq -c 'map(select(.name == "tracks365-playlist-sync"))[0]' <<< "$schedules")
+          [[ "$(jq -r .state <<< "$daily")" == "$(expected "$SCHEDULE_ENABLED_INPUT")" ]] || { echo "El Scheduler diario no coincide con schedule_enabled: $daily"; exit 1; }
+          [[ "$(jq -r .state <<< "$playlist")" == "$(expected "$PLAYLIST_SCHEDULE_ENABLED_INPUT")" ]] || { echo "El Scheduler de la playlist no coincide con playlist_schedule_enabled: $playlist"; exit 1; }
+
           identity=$(aws sts get-caller-identity --output json)
           test "$(jq -r .Account <<< "$identity")" = "$ACCOUNT"
           [[ "$(jq -r .Arn <<< "$identity")" == arn:aws:sts::$ACCOUNT:assumed-role/tracks365-prepare/* ]]
@@ -65,10 +107,11 @@ jobs:
           fi
 
           change_set="${STACK}-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          npx cdk deploy Tracks365ApiStack \
+          npx cdk deploy Tracks365ApiStack --app cdk.out \
             --role-arn "arn:aws:iam::$ACCOUNT:role/tracks365-cloudformation" \
             --method prepare-change-set --change-set-name "$change_set" \
             --require-approval never --no-notices
+
           aws cloudformation describe-change-set --stack-name "$STACK" --change-set-name "$change_set" > change-set.json
 
           # Guardas: el stack de la API nunca toca IAM ni reemplaza o elimina la tabla.
@@ -84,6 +127,16 @@ jobs:
           echo "changeset=$(jq -r .ChangeSetId change-set.json)" >> "$GITHUB_OUTPUT"
           {
             echo "### Change set \`$change_set\`"
+            echo
+            echo "CORS: \`${CORS_ALLOWED_ORIGINS:-(sin CORS)}\`"
+            echo
+            echo "#### Schedulers (estado sintetizado)"
+            echo
+            echo "| Scheduler | Estado | Hora UTC |"
+            echo "| --- | --- | --- |"
+            jq -r '.[] | (.cron | capture("^cron\\((?<m>[0-9]+) (?<h>[0-9]+) ") | "\(("0" + .h)[-2:]):\(("0" + .m)[-2:])") as $time | "| \(.name) | \(.state) | \($time) |"' <<< "$schedules"
+            echo
+            echo "#### Recursos"
             echo
             echo "| Acción | Recurso | Tipo | Reemplazo |"
             echo "| --- | --- | --- | --- |"

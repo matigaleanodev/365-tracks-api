@@ -21,14 +21,37 @@ export const API_NAME = '365-tracks-api';
 export const BUCKET = `tracks365-assets-${ACCOUNT}-${REGION}`;
 export const ASSET_PREFIX = `${STACK}/`;
 export const TABLE_NAME = 'tracks365-tracks';
+/** Reposición del catálogo (conserva el nombre del primer despliegue). */
 export const SCHEDULE_NAME = 'tracks365-daily-track';
+export const PLAYLIST_SCHEDULE_NAME = 'tracks365-playlist-sync';
 
-export const FUNCTIONS = { http: `${STACK}-http`, generate: `${STACK}-generate` } as const;
+export const FUNCTIONS = {
+  http: `${STACK}-http`,
+  generate: `${STACK}-generate`,
+  playlist: `${STACK}-playlist`,
+} as const;
+
+/**
+ * Parámetros de Parameter Store (se crean fuera de CloudFormation: son secretos). Los valores
+ * nunca pasan por este repositorio; aquí solo viven sus nombres y qué función los lee.
+ */
+export const SSM_PREFIX = '/tracks365';
+export const SSM_PARAMETERS = {
+  spotifyClientId: `${SSM_PREFIX}/spotify/client-id`,
+  spotifyClientSecret: `${SSM_PREFIX}/spotify/client-secret`,
+  spotifyRefreshToken: `${SSM_PREFIX}/spotify/refresh-token`,
+  openaiApiKey: `${SSM_PREFIX}/openai/api-key`,
+  openaiModel: `${SSM_PREFIX}/openai/model`,
+  criteriaWeights: `${SSM_PREFIX}/selection/criteria-weights`,
+} as const;
+
+const parameterArn = (name: string) => `arn:aws:ssm:${REGION}:${ACCOUNT}:parameter${name}`;
 
 /** Roles que crea la fundación y que el stack de la API solo importa. */
 export const ROLE_NAMES = [
   'http',
   'generate',
+  'playlist',
   'scheduler',
   'cloudformation',
   'prepare',
@@ -106,11 +129,43 @@ export function rolePolicies(): Record<RoleName, Json[]> {
   const functionArns = Object.values(FUNCTIONS).map(functionArn);
   return {
     http: [lambdaLogs(FUNCTIONS.http), allow(['dynamodb:GetItem', 'dynamodb:Query'], [tableArn])],
+    // Reposición del catálogo: lee todo el catálogo (Query) para no repetir canciones ni artistas,
+    // escribe una fecha por vez (PutItem condicional) y lee las credenciales de OpenAI y Spotify.
     generate: [
       lambdaLogs(FUNCTIONS.generate),
-      allow(['dynamodb:GetItem', 'dynamodb:PutItem'], [tableArn]),
+      allow(['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query'], [tableArn]),
+      allow(
+        ['ssm:GetParameters'],
+        [
+          SSM_PARAMETERS.spotifyClientId,
+          SSM_PARAMETERS.spotifyClientSecret,
+          SSM_PARAMETERS.openaiApiKey,
+          SSM_PARAMETERS.openaiModel,
+          SSM_PARAMETERS.criteriaWeights,
+        ].map(parameterArn),
+      ),
     ],
-    scheduler: [allow(['lambda:InvokeFunction'], [functionArn(FUNCTIONS.generate)])],
+    // Sincronización de la playlist: nunca ve las credenciales de OpenAI. Puede reescribir solo el
+    // refresh token de Spotify, porque Spotify puede rotarlo al renovar el acceso.
+    playlist: [
+      lambdaLogs(FUNCTIONS.playlist),
+      allow(['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:Query'], [tableArn]),
+      allow(
+        ['ssm:GetParameters'],
+        [
+          SSM_PARAMETERS.spotifyClientId,
+          SSM_PARAMETERS.spotifyClientSecret,
+          SSM_PARAMETERS.spotifyRefreshToken,
+        ].map(parameterArn),
+      ),
+      allow(['ssm:PutParameter'], [parameterArn(SSM_PARAMETERS.spotifyRefreshToken)]),
+    ],
+    scheduler: [
+      allow(
+        ['lambda:InvokeFunction'],
+        [functionArn(FUNCTIONS.generate), functionArn(FUNCTIONS.playlist)],
+      ),
+    ],
     prepare: [
       readStack(STACK),
       allow(['s3:GetObject', 's3:PutObject'], [assetArn]),
@@ -175,7 +230,7 @@ export function rolePolicies(): Record<RoleName, Json[]> {
         ],
         functionArns,
       ),
-      allow(['iam:PassRole'], [roleArn('http'), roleArn('generate')], {
+      allow(['iam:PassRole'], [roleArn('http'), roleArn('generate'), roleArn('playlist')], {
         StringEquals: { 'iam:PassedToService': 'lambda.amazonaws.com' },
       }),
       allow(['iam:PassRole'], [roleArn('scheduler')], {
@@ -188,7 +243,9 @@ export function rolePolicies(): Record<RoleName, Json[]> {
           'scheduler:UpdateSchedule',
           'scheduler:DeleteSchedule',
         ],
-        [`arn:aws:scheduler:${REGION}:${ACCOUNT}:schedule/default/${SCHEDULE_NAME}`],
+        [SCHEDULE_NAME, PLAYLIST_SCHEDULE_NAME].map(
+          (name) => `arn:aws:scheduler:${REGION}:${ACCOUNT}:schedule/default/${name}`,
+        ),
       ),
       allow(
         [
@@ -231,6 +288,7 @@ export const roleTrust = (name: RoleName): Json => {
   switch (name) {
     case 'http':
     case 'generate':
+    case 'playlist':
       return serviceTrust('lambda.amazonaws.com');
     case 'scheduler':
       return serviceTrust('scheduler.amazonaws.com');

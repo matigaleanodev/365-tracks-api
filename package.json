@@ -1,6 +1,6 @@
 {
   "name": "365-tracks-api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Backend serverless de 365 Tracks: una canción distinta por día.",
   "type": "module",
@@ -15,8 +15,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:integration": "node scripts/integration-dynamodb.ts",
     "build": "node scripts/build.mjs",
     "invoke": "node scripts/invoke-local.ts",
+    "preview:selection": "node scripts/preview-selection.ts",
     "synth": "npm run build && cdk synth --quiet --no-lookups",
     "check": "npm run lint && npm run format:check && npm run typecheck && npm test && npm run synth && npm run synth:foundation",
     "synth:foundation": "cdk synth --quiet --no-lookups --app \"node infra/foundation-app.ts\" --output cdk.foundation.out",
@@ -28,6 +30,7 @@
   },
   "devDependencies": {
     "@aws-sdk/client-dynamodb": "3.1175.0",
+    "@aws-sdk/client-ssm": "3.1175.0",
     "@aws-sdk/lib-dynamodb": "3.1175.0",
     "@eslint/js": "10.0.1",
     "@types/aws-lambda": "8.10.164",

@@ -6,9 +6,11 @@ import type { StackConfig } from '../../infra/config.ts';
 import {
   API_NAME,
   FUNCTIONS,
+  PLAYLIST_SCHEDULE_NAME,
   roleArn,
   rolePolicies,
   SCHEDULE_NAME,
+  SSM_PREFIX,
   TABLE_NAME,
 } from '../../infra/delivery.ts';
 import { Tracks365ApiStack } from '../../infra/tracks-api-stack.ts';
@@ -17,13 +19,19 @@ const baseConfig: StackConfig = {
   corsAllowedOrigins: ['https://365tracks.example'],
   publishTime: { hour: 0, minute: 5 },
   scheduleEnabled: false,
+  playlistSyncTime: { hour: 12, minute: 30 },
+  playlistScheduleEnabled: false,
 };
 
 function synth(config: StackConfig = baseConfig): Template {
   const app = new App();
   const stack = new Tracks365ApiStack(app, 'TestStack', {
     config,
-    code: { api: Code.fromInline('x'), generateDailyTrack: Code.fromInline('x') },
+    code: {
+      api: Code.fromInline('x'),
+      generateDailyTrack: Code.fromInline('x'),
+      syncPlaylist: Code.fromInline('x'),
+    },
   });
   return Template.fromStack(stack);
 }
@@ -60,9 +68,9 @@ describe('Tracks365ApiStack', () => {
     });
   });
 
-  it('crea dos Lambdas ARM64 con Node.js 24', () => {
+  it('crea tres Lambdas ARM64 con Node.js 24', () => {
     const template = synth();
-    template.resourceCountIs('AWS::Lambda::Function', 2);
+    template.resourceCountIs('AWS::Lambda::Function', 3);
     template.allResourcesProperties('AWS::Lambda::Function', {
       Runtime: 'nodejs24.x',
       Architectures: ['arm64'],
@@ -111,6 +119,58 @@ describe('Tracks365ApiStack', () => {
     );
   });
 
+  it('programa la playlist a las 12:30 UTC, deshabilitada por defecto y separada de la reposición', () => {
+    const template = synth();
+    template.resourceCountIs('AWS::Scheduler::Schedule', 2);
+    template.hasResourceProperties('AWS::Scheduler::Schedule', {
+      Name: PLAYLIST_SCHEDULE_NAME,
+      ScheduleExpression: 'cron(30 12 * * ? *)',
+      ScheduleExpressionTimezone: 'UTC',
+      State: 'DISABLED',
+    });
+    synth({ ...baseConfig, playlistScheduleEnabled: true }).hasResourceProperties(
+      'AWS::Scheduler::Schedule',
+      { Name: PLAYLIST_SCHEDULE_NAME, State: 'ENABLED' },
+    );
+    // Habilitar la reposición no habilita la playlist.
+    synth({ ...baseConfig, scheduleEnabled: true }).hasResourceProperties(
+      'AWS::Scheduler::Schedule',
+      { Name: PLAYLIST_SCHEDULE_NAME, State: 'DISABLED' },
+    );
+  });
+
+  it.each([
+    [{ scheduleEnabled: false, playlistScheduleEnabled: false }, 'DISABLED', 'DISABLED'],
+    [{ scheduleEnabled: true, playlistScheduleEnabled: false }, 'ENABLED', 'DISABLED'],
+    [{ scheduleEnabled: false, playlistScheduleEnabled: true }, 'DISABLED', 'ENABLED'],
+    [{ scheduleEnabled: true, playlistScheduleEnabled: true }, 'ENABLED', 'ENABLED'],
+  ])('cada Scheduler refleja solo su flag %j', (flags, daily, playlist) => {
+    const template = synth({ ...baseConfig, ...flags });
+    template.hasResourceProperties('AWS::Scheduler::Schedule', {
+      Name: SCHEDULE_NAME,
+      State: daily,
+    });
+    template.hasResourceProperties('AWS::Scheduler::Schedule', {
+      Name: PLAYLIST_SCHEDULE_NAME,
+      State: playlist,
+    });
+  });
+
+  it('acota el timeout y los parámetros de las Lambdas de música', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: FUNCTIONS.generate,
+      Timeout: 300,
+      Environment: Match.objectLike({
+        Variables: Match.objectLike({ SSM_PARAMETER_PREFIX: SSM_PREFIX }),
+      }),
+    });
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: FUNCTIONS.playlist,
+      Timeout: 120,
+    });
+  });
+
   it('no crea ni modifica IAM: usa los roles precreados por la fundación', () => {
     const template = synth();
     for (const type of ['AWS::IAM::Role', 'AWS::IAM::Policy', 'AWS::IAM::ManagedPolicy']) {
@@ -119,7 +179,9 @@ describe('Tracks365ApiStack', () => {
     const roles = Object.values(template.findResources('AWS::Lambda::Function')).map(
       (fn) => fn.Properties.Role,
     );
-    expect(roles.sort()).toEqual([roleArn('generate'), roleArn('http')]);
+    expect(roles.sort()).toEqual(
+      [roleArn('generate'), roleArn('http'), roleArn('playlist')].sort(),
+    );
     template.hasResourceProperties('AWS::Scheduler::Schedule', {
       Name: SCHEDULE_NAME,
       Target: Match.objectLike({ RoleArn: roleArn('scheduler') }),
@@ -132,10 +194,14 @@ describe('Tracks365ApiStack', () => {
     const names = Object.values(template.findResources('AWS::Lambda::Function'))
       .map((fn) => fn.Properties.FunctionName)
       .sort();
-    expect(names).toEqual([FUNCTIONS.generate, FUNCTIONS.http].sort());
+    expect(names).toEqual([FUNCTIONS.generate, FUNCTIONS.http, FUNCTIONS.playlist].sort());
     const groups = Object.values(template.findResources('AWS::Logs::LogGroup'))
       .map((group) => group.Properties.LogGroupName)
       .sort();
-    expect(groups).toEqual([`/aws/lambda/${FUNCTIONS.generate}`, `/aws/lambda/${FUNCTIONS.http}`]);
+    expect(groups).toEqual(
+      [FUNCTIONS.generate, FUNCTIONS.http, FUNCTIONS.playlist]
+        .map((n) => `/aws/lambda/${n}`)
+        .sort(),
+    );
   });
 });

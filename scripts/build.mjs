@@ -8,6 +8,7 @@ const result = await build({
   entryPoints: {
     'api/index': 'src/api/handler.ts',
     'generate-daily-track/index': 'src/jobs/generate-daily-track-handler.ts',
+    'sync-playlist/index': 'src/jobs/sync-playlist-handler.ts',
   },
   outdir: 'dist',
   outExtension: { '.js': '.mjs' },

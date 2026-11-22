@@ -18,11 +18,12 @@ export function buildDevFixtures(now: Date, days = 5): DailyTrack[] {
       spotifyTrackId: `fixture-track-${number}`,
       spotifyUrl: `https://open.spotify.com/track/fixture-track-${number}`,
       selectionCriterion: 'development-fixture',
+      // La API solo publica canciones completas: la descripción es obligatoria.
+      description: `Descripción ficticia ${number} para desarrollo local, sin relación con ninguna canción real.`,
       createdAt: now.toISOString(),
     };
     if (number % 2 === 1) {
       track.coverUrl = `https://example.com/covers/fixture-${number}.jpg`;
-      track.description = `Fixture description ${number}.`;
     }
     return track;
   });

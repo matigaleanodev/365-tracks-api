@@ -15,5 +15,14 @@
     "skipLibCheck": true,
     "types": ["node", "aws-lambda"]
   },
-  "include": ["src", "infra", "scripts", "test", "vitest.config.ts", "eslint.config.js"]
+  "include": [
+    "src",
+    "infra",
+    "scripts",
+    "test",
+    "test-integration",
+    "vitest.config.ts",
+    "vitest.integration.config.ts",
+    "eslint.config.js"
+  ]
 }

@@ -110,3 +110,14 @@ The **deploy** workflow takes the `cors_allowed_origins` input (default `http://
 - Each deployment sets the **complete** list: to add the final frontend domain, run the workflow with `http://localhost:4200,https://<domain>` (and drop localhost once it is no longer needed). The run summary shows the list in effect; the change set shows the API change.
 
 Test with `curl -i -H "Origin: https://<origin>" <api-url>/api/tracks` and look for `access-control-allow-origin`.
+
+## Catalog health signals
+
+Each execution of the replenishment Lambda logs a `catalog-replenish` JSON event (dates and counts only, never titles or artists) and returns the same fields. `status` is one of `catalog-complete`, `progressed`, `stalled-no-time` (too little time left in the invocation: nothing is started and the execution ends without error), `stalled-budget-exhausted` (time ran out before completing any date; the execution fails) and `failed` (a date failed; the execution fails). Also reported: `incompleteCount`, `missingCount`, `preparedAhead` (consecutive complete dates from the start of the window, which is yesterday in UTC) and `runwayLow` (`preparedAhead` below 7).
+
+No alarm resources exist in the stack. Once the schedules are enabled, these conditions should page the owner:
+
+- the Lambda ends with an error (`failed` or `stalled-budget-exhausted`), or `stalled-*` repeats in consecutive executions;
+- `runwayLow` is `true`;
+- `incompleteCount` is greater than 0 (incomplete dates are never repaired automatically);
+- no execution logged `progressed` or `catalog-complete` for a period longer than the schedule interval, or the window shows no progress close to the current date.

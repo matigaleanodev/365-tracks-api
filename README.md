@@ -93,7 +93,9 @@ npm ci                 # install dependencies
 npm run lint           # ESLint
 npm run format         # Prettier (writes); format:check only verifies
 npm run typecheck      # tsc --noEmit
-npm test               # Vitest
+npm test               # Vitest (unit tests, no Docker)
+npm run test:integration  # repository against DynamoDB Local, see TESTING.md
+npm run preview:selection -- --date=YYYY-MM-DD --simulate  # selection preview, see TESTING.md
 npm run build          # bundle each Lambda into dist/ with esbuild
 npm run synth          # build + cdk synth (no lookups, no AWS access)
 npm run check          # lint + format:check + typecheck + test + synth
@@ -108,6 +110,10 @@ npm run invoke -- GET /api/tracks/2027-02-30
 ```
 
 Invokes the real handler with an API Gateway v2 event and fictional data, without AWS or an HTTP server. `--now=<ISO instant>` fixes the handler clock (local only).
+
+## Testing
+
+Unit tests, DynamoDB Local integration tests and the selection preview are described in [TESTING.md](TESTING.md).
 
 ## Deployment
 

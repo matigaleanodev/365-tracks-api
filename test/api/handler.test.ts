@@ -481,7 +481,7 @@ describe('publicación por zona horaria', () => {
 });
 
 describe('datos internos', () => {
-  const internal: DailyTrack = {
+  const publicTrack = {
     date: '2027-01-10',
     title: 'Internal',
     artist: 'Artist',
@@ -490,22 +490,34 @@ describe('datos internos', () => {
     spotifyTrackId: 'abcdefghijklmnopqrstuv',
     spotifyUrl: 'https://open.spotify.com/track/abcdefghijklmnopqrstuv',
     selectionCriterion: 'hidden-gem',
+    coverUrl: 'https://example.com/cover.webp',
     description:
       'Una canción de guitarras luminosas y base rítmica directa, pensada para arrancar el día.',
     createdAt: '2026-12-01T00:00:00.000Z',
+  };
+  const internal = {
+    ...publicTrack,
     spotifyArtistId: 'artist00000000000000AA',
+    internalMetadata: { source: 'catalog' },
   };
   const repository = () => new InMemoryTrackRepository([internal]);
 
-  it('el ID de artista de Spotify no sale por la API (contrato HTTP sin cambios)', async () => {
-    const single = await call(repository(), event('/api/tracks/2027-01-10'));
-    const list = await call(repository(), event('/api/tracks'));
-    const today = await call(repository(), event('/api/tracks/today'));
+  it.each(['/api/tracks/2027-01-10', '/api/tracks/today'])(
+    '%s devuelve solo los campos públicos',
+    async (path) => {
+      const { statusCode, body } = await call(repository(), event(path));
+      expect(statusCode).toBe(200);
+      expect(body).toStrictEqual({ data: publicTrack });
+    },
+  );
 
-    expect((single.body as TrackResponse).data).not.toHaveProperty('spotifyArtistId');
-    expect((list.body as TrackListResponse).data[0]).not.toHaveProperty('spotifyArtistId');
-    expect((today.body as TrackResponse).data).not.toHaveProperty('spotifyArtistId');
-    expect((single.body as TrackResponse).data.description).toBe(internal.description);
+  it('el historial devuelve solo los campos públicos de cada canción', async () => {
+    const { statusCode, body } = await call(repository(), event('/api/tracks'));
+    expect(statusCode).toBe(200);
+    expect(body).toStrictEqual({
+      data: [publicTrack],
+      pagination: { limit: 30, nextCursor: null },
+    });
   });
 
   it('las particiones de la playlist no aparecen en el listado de canciones', async () => {

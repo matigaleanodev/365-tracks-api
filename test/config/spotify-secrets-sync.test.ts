@@ -157,6 +157,26 @@ describe('createRotationPersister', () => {
     await expect(persist('token-3')).resolves.toBe(true);
   });
 
+  it('si la escritura y la relectura fallan, reconoce después su propio valor y no pierde la rotación', async () => {
+    const { store, values } = memoryStore({ [TOKEN]: 'token-1' });
+    const persist = createRotationPersister(store, TOKEN, 'token-1');
+    const { put, getMany } = store;
+    let failReads = false;
+    store.put = async (name, value) => {
+      await put(name, value);
+      failReads = true;
+      throw new Error('timeout');
+    };
+    store.getMany = (names) => (failReads ? Promise.reject(new Error('sin red')) : getMany(names));
+    await expect(persist('token-2')).rejects.toThrow('timeout');
+    expect(values.get(TOKEN)).toBe('token-2');
+    store.put = put;
+    failReads = false;
+    // El parámetro tiene el valor que escribió esta instancia: la rotación siguiente se guarda.
+    await expect(persist('token-3')).resolves.toBe(true);
+    expect(values.get(TOKEN)).toBe('token-3');
+  });
+
   it('una instancia caliente no pisa un token que otro proceso reemplazó', async () => {
     const { store, values, writes } = memoryStore({ [TOKEN]: 'token-1' });
     const persist = createRotationPersister(store, TOKEN, 'token-1');

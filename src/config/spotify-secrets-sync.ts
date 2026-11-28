@@ -144,10 +144,13 @@ export async function syncSpotifySecrets(
  */
 export function createRotationPersister(store: ParameterStore, name: string, initial: string) {
   let known = initial;
+  // Valor escrito sin confirmación (falló la escritura y también la relectura): si el parámetro
+  // lo tiene después, lo escribió esta instancia y no es un reemplazo ajeno.
+  let unconfirmed: string | undefined;
   return async (rotated: string): Promise<boolean> => {
     const read = async () => (await store.getMany([name])).get(name)?.trim();
     const current = await read();
-    if (current !== undefined && current !== known) return false;
+    if (current !== undefined && current !== known && current !== unconfirmed) return false;
     try {
       await store.put(name, rotated);
     } catch (error) {
@@ -155,12 +158,14 @@ export function createRotationPersister(store: ParameterStore, name: string, ini
       // reemplazo ajeno. El error se propaga: la rotación no quedó confirmada.
       try {
         if ((await read()) === rotated) known = rotated;
+        unconfirmed = undefined;
       } catch {
-        // Sin relectura se conserva `known`; el error de arriba ya hace fallar la ejecución.
+        unconfirmed = rotated;
       }
       throw error;
     }
     known = rotated;
+    unconfirmed = undefined;
     return true;
   };
 }

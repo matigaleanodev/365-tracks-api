@@ -1,0 +1,5 @@
+{
+  "corsAllowedOrigins": ["http://localhost:4200"],
+  "scheduleEnabled": false,
+  "playlistScheduleEnabled": false
+}

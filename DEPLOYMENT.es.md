@@ -105,7 +105,7 @@ La configuración del despliegue está versionada en [`deploy/production.json`](
 
 ```json
 {
-  "corsAllowedOrigins": ["http://localhost:4200"],
+  "corsAllowedOrigins": ["https://daywave.matiasgaleano.dev"],
   "scheduleEnabled": false,
   "playlistScheduleEnabled": false
 }
@@ -187,9 +187,19 @@ CLIs privados con un `AWS_PROFILE` autorizado; ninguno se expone por HTTP y ning
 - Orígenes con forma `esquema://host[:puerto]`, sin ruta ni barra final; los duplicados se ignoran.
 - `*` se rechaza. Se exige `https`, salvo `http` para `localhost` / `127.0.0.1`.
 - Lista vacía = sin configuración CORS.
-- El archivo tiene la lista **completa**: para sumar el dominio definitivo del frontend, agregá `https://<dominio>` (y quitá localhost cuando ya no haga falta). El resumen del run muestra la lista vigente; el change set muestra el cambio en la API.
+- El archivo tiene la lista **completa** de orígenes de producción: solo el dominio público del frontend. El desarrollo local del frontend usa fixtures o una API local, no la de producción.
 
 Probalo con `curl -i -H "Origin: https://<origen>" <url-api>/api/tracks` y buscá `access-control-allow-origin`.
+
+## Rollback
+
+Los datos no forman parte de ningún rollback: la tabla tiene `DeletionPolicy: Retain` y recuperación point-in-time, y ningún paso de esta sección la modifica.
+
+- **Falla el despliegue.** Si el change set falla, CloudFormation vuelve solo al template anterior y el job `execute` termina en error. Antes de reintentar, leé el estado real del stack (`aws --profile PERFIL_AUTORIZADO --region us-east-1 cloudformation describe-stacks --stack-name tracks365-api`): `UPDATE_ROLLBACK_COMPLETE` admite un nuevo despliegue; cualquier otro estado se revisa a mano. Un workflow fallido después de `execute` no implica que producción haya quedado sin cambios.
+- **Una versión publicada falla.** La corrección es un `release/x.x.x` nuevo hacia `main` con el arreglo o la reversión del cambio; el merge lo despliega con las mismas verificaciones. Para frenar los procesos editoriales, ese release deja `scheduleEnabled` y `playlistScheduleEnabled` en `false`.
+- **Orden con la fundación.** Los roles se agregan, nunca se reemplazan: una versión anterior de la API funciona con una fundación más nueva. No revertir la fundación ni el ceiling mientras la API desplegada use sus roles o permisos nuevos; primero se despliega la versión que ya no los necesita.
+- **Políticas administrativas.** Para volver a la versión anterior del ceiling, `iam list-policy-versions` y `iam set-default-policy-version --version-id vN` sobre `tracks365-ceiling` (las versiones anteriores se conservan). Para la política del rol de CloudFormation de la fundación, `iam put-role-policy` con la copia guardada antes del cambio.
+- **Fundación.** Un change set con el template anterior guardado, con los mismos comandos y comprobaciones de "Cambios de roles antes de un release".
 
 ## Señales de salud del catálogo
 

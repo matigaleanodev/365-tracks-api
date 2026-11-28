@@ -1,5 +1,5 @@
 {
-  "corsAllowedOrigins": ["http://localhost:4200"],
+  "corsAllowedOrigins": ["https://daywave.matiasgaleano.dev"],
   "scheduleEnabled": false,
   "playlistScheduleEnabled": false
 }

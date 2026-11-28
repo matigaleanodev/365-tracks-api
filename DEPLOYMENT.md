@@ -105,7 +105,7 @@ Deployment configuration is versioned in [`deploy/production.json`](deploy/produ
 
 ```json
 {
-  "corsAllowedOrigins": ["http://localhost:4200"],
+  "corsAllowedOrigins": ["https://daywave.matiasgaleano.dev"],
   "scheduleEnabled": false,
   "playlistScheduleEnabled": false
 }
@@ -187,9 +187,19 @@ Private CLIs with an authorized `AWS_PROFILE`; none is exposed over HTTP and no 
 - Origins as `scheme://host[:port]`, no path or trailing slash; duplicates are ignored.
 - `*` is rejected. `https` is required, except `http` for `localhost` / `127.0.0.1`.
 - Empty list = no CORS configuration.
-- The file holds the **complete** list: to add the final frontend domain, add `https://<domain>` (and drop localhost once it is no longer needed). The run summary shows the list in effect; the change set shows the API change.
+- The file holds the **complete** list of production origins: only the public frontend domain. Local frontend development uses fixtures or a local API, not production.
 
 Test with `curl -i -H "Origin: https://<origin>" <api-url>/api/tracks` and look for `access-control-allow-origin`.
+
+## Rollback
+
+Data is never part of a rollback: the table has `DeletionPolicy: Retain` and point-in-time recovery, and no step in this section touches it.
+
+- **A deployment fails.** If the change set fails, CloudFormation returns to the previous template and the `execute` job fails. Before retrying, read the real stack state (`aws --profile AUTHORIZED_PROFILE --region us-east-1 cloudformation describe-stacks --stack-name tracks365-api`): `UPDATE_ROLLBACK_COMPLETE` accepts a new deployment; any other state needs manual review. A workflow that fails after `execute` does not mean production was left unchanged.
+- **A released version misbehaves.** The fix is a new `release/x.x.x` to `main` with the fix or a revert; the merge deploys it with the same checks. To stop the editorial jobs, that release keeps `scheduleEnabled` and `playlistScheduleEnabled` at `false`.
+- **Ordering with the foundation.** Roles are added, never replaced: an older API version works with a newer foundation. Do not revert the foundation or the ceiling while the deployed API uses its new roles or permissions; deploy the version that no longer needs them first.
+- **Administrative policies.** To return to the previous ceiling version, run `iam list-policy-versions` and `iam set-default-policy-version --version-id vN` on `tracks365-ceiling` (older versions are kept). For the foundation CloudFormation role policy, run `iam put-role-policy` with the copy saved before the change.
+- **Foundation.** A change set with the saved previous template, using the same commands and checks as "Role changes before a release".
 
 ## Catalog health signals
 

@@ -147,7 +147,8 @@ describe('orígenes CORS', () => {
           })[key],
         {},
       );
-      expect(resolved.corsAllowedOrigins.length).toBeGreaterThan(0);
+      // Producción solo acepta el dominio público del frontend.
+      expect(resolved.corsAllowedOrigins).toEqual(['https://daywave.matiasgaleano.dev']);
       // Activarlas es una decisión explícita (cambio revisado en este archivo), no un default.
       expect(config.scheduleEnabled).toBe(false);
       expect(config.playlistScheduleEnabled).toBe(false);

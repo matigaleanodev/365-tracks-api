@@ -8,10 +8,13 @@ import { SPOTIFY_TOKEN_URL } from './auth.ts';
 import { SpotifyAuthError } from './errors.ts';
 
 /**
- * Permiso mínimo para administrar una playlist pública propia. No se piden permisos de lectura de
- * biblioteca, reproducción ni playlists privadas: la playlist anual es pública.
+ * Permisos mínimos para administrar una playlist pública propia: escribirla y encontrarla por nombre
+ * entre las de la cuenta. Listar las playlists propias (`GET /me/playlists`) exige
+ * `playlist-read-private` aunque sean públicas, y en Development Mode `GET /users/{id}/playlists`
+ * responde 403; sin ese listado la sincronización no puede reutilizar una playlist existente. No se
+ * piden permisos de biblioteca, reproducción ni de escritura de playlists privadas.
  */
-export const PLAYLIST_SCOPES = ['playlist-modify-public'] as const;
+export const PLAYLIST_SCOPES = ['playlist-modify-public', 'playlist-read-private'] as const;
 
 export const SPOTIFY_AUTHORIZE_URL = 'https://accounts.spotify.com/authorize';
 

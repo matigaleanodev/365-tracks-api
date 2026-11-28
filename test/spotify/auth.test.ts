@@ -216,7 +216,7 @@ describe('refresh token del dueño', () => {
 
 describe('autorización inicial del dueño', () => {
   it('pide solo el permiso mínimo para una playlist pública', () => {
-    expect(PLAYLIST_SCOPES).toEqual(['playlist-modify-public']);
+    expect(PLAYLIST_SCOPES).toEqual(['playlist-modify-public', 'playlist-read-private']);
   });
 
   it.each([
@@ -238,7 +238,7 @@ describe('autorización inicial del dueño', () => {
         state: 'abc',
       }),
     );
-    expect(url.searchParams.get('scope')).toBe('playlist-modify-public');
+    expect(url.searchParams.get('scope')).toBe('playlist-modify-public playlist-read-private');
     expect(url.searchParams.get('state')).toBe('abc');
     expect(url.searchParams.get('response_type')).toBe('code');
     expect(() =>

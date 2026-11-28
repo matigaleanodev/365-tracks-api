@@ -1,6 +1,6 @@
 # Despliegue
 
-Cómo levantar y desplegar el proyecto. Los workflows son manuales y el repositorio no necesita bootstrap de CDK.
+Cómo levantar y desplegar el proyecto. Integrar en `main` despliega automáticamente: ese merge es la autorización. Ejecutar un workflow a mano es la excepción. El repositorio no necesita bootstrap de CDK.
 
 ## Modelo
 
@@ -17,6 +17,7 @@ Cómo levantar y desplegar el proyecto. Los workflows son manuales y el reposito
 | `tracks365-prepare`                                                                 | job `plan` (entorno `plan`)                  | Sube assets y crea el change set                  |
 | `tracks365-execute`                                                                 | job `execute` (entorno `production`)         | Ejecuta el change set revisado                    |
 | `tracks365-cloudformation`                                                          | CloudFormation                               | Crea los recursos de la API                       |
+| `tracks365-secrets`                                                                 | workflow `sync-secrets` (entorno `secrets`)  | Escribe los parámetros de Spotify                 |
 | `tracks365-http`, `tracks365-generate`, `tracks365-playlist`, `tracks365-scheduler` | Lambda / Scheduler                           | Runtime, con permisos mínimos                     |
 
 ## Prerrequisitos (una vez, con permisos de administración)
@@ -44,9 +45,22 @@ Los documentos están generados en `deploy/admin/` (`npm run admin:policies` los
      --policy-document file://deploy/admin/tracks365-foundation.policy.json
    ```
 5. Entornos de GitHub (Settings → Environments), todos limitados a la rama `main`:
-   - `foundation`: revisores requeridos.
+   - `foundation`: revisores requeridos (cambia roles IAM).
    - `plan`: sin revisores.
-   - `production`: revisores requeridos.
+   - `production`: sin revisores. Integrar el release en `main` es la autorización.
+   - `secrets`: sin revisores (su único workflow es manual). Lo crea `scripts/setup-github-secrets.sh`.
+
+Cuando cambian los roles (un rol nuevo o permisos nuevos), el administrador publica los documentos regenerados antes de ejecutar **foundation**: una versión nueva por defecto del ceiling y la política del rol de CloudFormation de la fundación.
+
+```bash
+aws --profile PERFIL_ADMIN --region us-east-1 iam create-policy-version --set-as-default \
+  --policy-arn arn:aws:iam::650387442642:policy/tracks365-ceiling \
+  --policy-document file://deploy/admin/tracks365-ceiling.policy.json
+aws --profile PERFIL_ADMIN --region us-east-1 iam put-role-policy --role-name tracks365-foundation-cloudformation --policy-name project \
+  --policy-document file://deploy/admin/tracks365-foundation-cloudformation.policy.json
+```
+
+Una política gestionada guarda como máximo cinco versiones: si hace falta, borrar antes la más vieja que no sea la por defecto (`iam list-policy-versions`, `iam delete-policy-version`).
 
 En cada comando, reemplazá `PERFIL_ADMIN` por un perfil local de AWS CLI con los permisos de administración necesarios. Antes de cada mutación, verificá la identidad y comprobá la cuenta y la región de destino:
 
@@ -60,54 +74,120 @@ La cuenta debe ser `650387442642` y la región `us-east-1`; si no coinciden, no 
 
 Los workflows solo corren desde `main`, así que primero hace falta un release (`release/x.x.x` → `main`).
 
-1. Ejecutar el workflow **foundation** y aprobar el entorno `foundation`. Crea el bucket y los siete roles.
-2. Ejecutar el workflow **deploy**. El job `plan` valida, empaqueta, sube los assets y crea el change set (queda resumido en la página del run); el job `execute` espera la aprobación del entorno `production` y ejecuta ese mismo change set.
+1. Ejecutar el workflow **foundation** y aprobar el entorno `foundation`. Crea el bucket y los ocho roles. Sigue siendo manual: cambia roles de entrega.
+2. Integrar el release en `main` dispara **deploy**. El job `plan` valida, empaqueta, sube los assets y crea el change set (queda resumido en la página del run); el job `execute` ejecuta ese mismo change set sin otra aprobación; después el job `release` publica el tag y la release de GitHub `v<versión de package.json>` si todavía no existen. **deploy** también puede ejecutarse a mano desde `main`, con la misma configuración y sin inputs.
 
-El job `plan` se detiene si el change set toca IAM o si elimina o reemplaza la tabla.
+El job `plan` se detiene si el change set toca IAM o elimina o reemplaza la tabla.
+
+### Cambios de roles antes de un release
+
+El stack de la API importa sus roles, así que un release cuyo código necesita un rol o permisos nuevos tiene que encontrarlos ya creados. Los workflows solo corren desde `main`, que todavía tiene el release anterior, así que un administrador actualiza la fundación **antes** de integrar ese release, desde la rama del release, con el mismo template y las mismas comprobaciones que el workflow (después de publicar el ceiling y la política regenerados, ver Prerrequisitos):
+
+```bash
+npm ci && npm run synth:foundation
+P="--profile PERFIL_ADMIN --region us-east-1"; S=tracks365-foundation; C=admin-$(date +%Y%m%d%H%M%S)
+aws $P cloudformation create-change-set --stack-name $S --change-set-name $C --change-set-type UPDATE \
+  --template-body file://cdk.foundation.out/Tracks365Foundation.template.json \
+  --role-arn arn:aws:iam::650387442642:role/tracks365-foundation-cloudformation --capabilities CAPABILITY_NAMED_IAM
+aws $P cloudformation wait change-set-create-complete --stack-name $S --change-set-name $C
+aws $P cloudformation describe-change-set --stack-name $S --change-set-name $C \
+  --query 'Changes[].ResourceChange.[Action,LogicalResourceId,ResourceType,Replacement]' --output table
+# Continuar solo si todos los cambios son AWS::IAM::Role o recursos S3, Add o Modify, sin reemplazo.
+aws $P cloudformation execute-change-set --stack-name $S --change-set-name $C
+aws $P cloudformation wait stack-update-complete --stack-name $S
+```
+
+Con el release ya en `main`, el workflow **foundation** no encontraría nada que cambiar; solo hace falta para el próximo cambio de roles que pase por `main`.
 
 ## Configuración de la aplicación
 
-`PUBLISH_TIME_UTC`, `SCHEDULE_ENABLED`, `PLAYLIST_SYNC_TIME_UTC` y `PLAYLIST_SCHEDULE_ENABLED` se leen en el synth (contexto de CDK, luego variables de entorno, luego defaults). El workflow **deploy** controla los dos schedules con inputs booleanos, desmarcados por defecto:
+La configuración del despliegue está versionada en [`deploy/production.json`](deploy/production.json):
 
-- `schedule_enabled`: reposición diaria del catálogo (00:00 UTC).
-- `playlist_schedule_enabled`: sincronización anual de la playlist (12:30 UTC).
+```json
+{
+  "corsAllowedOrigins": ["http://localhost:4200"],
+  "scheduleEnabled": false,
+  "playlistScheduleEnabled": false
+}
+```
 
-Por defecto **ambos schedules quedan deshabilitados**. Cada despliegue fija su estado de forma explícita (el workflow se los pasa a CDK como contexto e ignora `PUBLISH_TIME_UTC`, `SCHEDULE_ENABLED`, `PLAYLIST_SCHEDULE_ENABLED` y `PLAYLIST_SYNC_TIME_UTC` heredadas), así que un despliegue posterior con los inputs desmarcados los vuelve a deshabilitar. El job `plan` sintetiza una sola vez y falla, antes de crear el change set, si el estado sintetizado difiere de los inputs; luego prepara el change set con ese mismo ensamblado verificado. El resumen del run lista cada schedule con su estado y hora UTC. Habilitá cada uno recién cuando existan sus credenciales y se haya verificado una ejecución manual. La hora de la playlist debe ser 12:00 UTC o posterior.
+- `scheduleEnabled`: reposición diaria del catálogo (00:00 UTC).
+- `playlistScheduleEnabled`: sincronización de la playlist anual (12:30 UTC).
+
+En el archivo **ambos schedules están deshabilitados**. Cambiar su estado, o la lista de CORS, es un cambio revisado a ese archivo que llega a producción con el siguiente release; un despliegue de código nunca los cambia por sí solo. El workflow se los pasa a CDK como contexto e ignora `PUBLISH_TIME_UTC`, `SCHEDULE_ENABLED`, `PLAYLIST_SCHEDULE_ENABLED` y `PLAYLIST_SYNC_TIME_UTC` heredadas. El job `plan` sintetiza una sola vez y falla, antes de crear el change set, si el estado sintetizado difiere del archivo; luego prepara el change set con ese mismo ensamblado verificado. El resumen del run lista cada schedule con su estado y hora UTC. Habilitá cada uno recién cuando existan sus credenciales y se haya verificado una ejecución manual. La hora de la playlist debe ser 12:00 UTC o posterior.
 
 ### Credenciales (Parameter Store)
 
-Las credenciales son parámetros `SecureString` bajo `/tracks365`, cifrados con la clave por defecto `aws/ssm` (no hacen falta permisos de KMS extra). Las crea un administrador o la persona propietaria, nunca el pipeline, y no se versionan. Cada rol de Lambda lee solo lo que necesita:
+Parameter Store es la fuente operativa que lee el backend: parámetros `SecureString` bajo `/tracks365`, cifrados con la clave por defecto `aws/ssm` (no hacen falta permisos de KMS extra). No se versionan y nunca llegan al frontend. Cada rol de Lambda lee solo lo que necesita:
 
-| Parámetro                               | Contenido                                        | Lo leen            |
-| --------------------------------------- | ------------------------------------------------ | ------------------ |
-| `/tracks365/spotify/client-id`          | Client id de la app de Spotify                   | generate, playlist |
-| `/tracks365/spotify/client-secret`      | Client secret de la app de Spotify               | generate, playlist |
-| `/tracks365/spotify/refresh-token`      | Refresh token del dueño (lo escribe el script)   | playlist (rota)    |
-| `/tracks365/openai/api-key`             | API key de OpenAI                                | generate           |
-| `/tracks365/openai/model`               | Nombre del modelo de OpenAI a usar (obligatorio) | generate           |
-| `/tracks365/selection/criteria-weights` | JSON opcional con los seis pesos de criterios    | generate           |
+| Parámetro                                      | Contenido                                              | Lo leen            | Lo escriben              |
+| ---------------------------------------------- | ------------------------------------------------------ | ------------------ | ------------------------ |
+| `/tracks365/spotify/client-id`                 | Client id de la app de Spotify                         | generate, playlist | `sync-secrets`           |
+| `/tracks365/spotify/client-secret`             | Client secret de la app de Spotify                     | generate, playlist | `sync-secrets`           |
+| `/tracks365/spotify/refresh-token`             | Refresh token de la cuenta dueña                       | playlist           | `sync-secrets`, playlist |
+| `/tracks365/spotify/refresh-token-seed-sha256` | SHA-256 del último refresh token sembrado desde GitHub | -                  | `sync-secrets`           |
+| `/tracks365/openai/api-key`                    | API key de OpenAI                                      | generate           | administrador (manual)   |
+| `/tracks365/openai/model`                      | Nombre del modelo de OpenAI a usar (obligatorio)       | generate           | administrador (manual)   |
+| `/tracks365/selection/criteria-weights`        | JSON opcional con los seis pesos de criterios          | generate           | administrador (manual)   |
+
+#### Credenciales de Spotify: GitHub Secrets → Parameter Store
+
+La fuente de las credenciales de Spotify es el entorno `secrets` del repositorio de GitHub, con tres secretos: `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` y `SPOTIFY_REFRESH_TOKEN`. El workflow manual **sync-secrets** (sin inputs, solo desde `main`) asume `tracks365-secrets` por OIDC y los copia a Parameter Store. Ese rol solo puede leer y escribir los cuatro parámetros de Spotify de arriba, y leer el historial del refresh token.
+
+- Valida que estén los tres secretos y que no estén vacíos antes de escribir nada; nunca escribe un valor vacío.
+- Es idempotente: escribe solo lo que difiere e imprime solo nombres de parámetros y acciones (`created`, `updated`, `unchanged`, `kept-rotated`).
+- Spotify puede devolver un refresh token nuevo cuando la Lambda de la playlist renueva el access token; la Lambda lo guarda en Parameter Store. El parámetro de huella guarda el SHA-256 del último valor sembrado desde GitHub: mientras `SPOTIFY_REFRESH_TOKEN` no cambie, una sincronización posterior conserva el token rotado (`kept-rotated`) en vez de restaurar el viejo. Un valor nuevo en GitHub (una autorización nueva) se siembra y lo reemplaza; un valor que Parameter Store ya tuvo en una versión anterior (su historial) nunca se restaura. A su vez, la Lambda no guarda una rotación si el parámetro ya no tiene el token del que partió (una instancia caliente después de una sincronización o de una autorización nueva).
+- Parameter Store no admite escrituras condicionales: no correr **sync-secrets** mientras el Scheduler de la playlist pueda estar corriendo.
+- Los despliegues de código no dependen de este workflow. Se corre en la carga inicial y después de cada rotación.
+
+Carga inicial o rotación, desde WSL en la raíz del repositorio (requiere `gh` autenticado con permisos de administración del repositorio, Node 24 y `npm ci`):
 
 ```bash
-aws --profile PERFIL_ADMIN --region us-east-1 ssm put-parameter --type SecureString \
-  --name /tracks365/openai/model --value "<modelo>"        # repetir por parámetro; no pegar secretos en terminales compartidas
+bash scripts/setup-github-secrets.sh
+```
+
+El script pide los valores sin eco y los pasa a `gh secret set` por stdin, así que nada queda en el historial. Crea el entorno `secrets` limitado a `main`, puede quitar los revisores de `production` (solo después de comprobar que `main` exige pull request y de limitar `plan` y `production` a `main`), ejecuta la autorización de Spotify para obtener el refresh token (o acepta uno existente) y también puede sembrar Parameter Store en el momento con `AWS_PROFILE=architect`. Después:
+
+```bash
+gh workflow run sync-secrets.yml --repo matigaleanodev/365-tracks-api --ref main
+```
+
+Los parámetros de OpenAI se siguen creando a mano. La key se lee sin eco para que no quede en el historial:
+
+```bash
+bash -c 'read -rs -p "API key de OpenAI: " key; echo; [[ -n $key ]] || exit 1
+  aws --profile PERFIL_ADMIN --region us-east-1 ssm put-parameter --type SecureString --overwrite \
+    --name /tracks365/openai/api-key --value file:///dev/stdin <<< "$key"'
+aws --profile PERFIL_ADMIN --region us-east-1 ssm put-parameter --type SecureString --overwrite \
+  --name /tracks365/openai/model --value "<modelo>"
 ```
 
 ### Configuración manual en Spotify Developer
 
-1. Con la cuenta propietaria (en Development Mode se requiere Spotify **Premium**), crear una app en el Spotify Developer Dashboard y registrar la redirect URI `http://127.0.0.1:8888/callback` (IP loopback literal; `localhost` no se acepta).
-2. Guardar el client id y el secret en Parameter Store como arriba.
-3. Ejecutar la autorización inicial desde una máquina de confianza: `SPOTIFY_CLIENT_ID=... SPOTIFY_CLIENT_SECRET=... AWS_PROFILE=PERFIL_AUTORIZADO node scripts/spotify-authorize.ts --store`. Pide solo `playlist-modify-public` y guarda el refresh token sin imprimirlo. Sin `--store` solo valida el flujo.
-4. En Development Mode el refresh token puede vencer (alrededor de seis meses) o ser revocado; la sincronización falla entonces con `invalid_grant` y hay que repetir el paso 3.
-5. `AWS_PROFILE=PERFIL_AUTORIZADO node scripts/playlist.ts sync` es un dry-run: no modifica playlists ni registros de sincronización, y solo considera días terminados en todas las zonas (desde las 12:00 UTC de D+1). Con un registro guardado de la playlist del año, lee la playlist real y reporta lo que agregaría; sin registro, no consulta Spotify y el resultado es una cota superior (al escribir se reutiliza una playlist existente con el mismo nombre en vez de duplicarla). Su única escritura posible es guardar en Parameter Store un refresh token que Spotify haya rotado (requiere `ssm:PutParameter`), porque descartarlo podría invalidar la autorización. Si ese guardado falla, la ejecución se aborta (código 1). `--write` es la única forma de crear playlists o agregar canciones. Si el script rota y guarda el token mientras una Lambda de playlist está caliente, esa instancia sigue con el token anterior hasta un arranque en frío: no ejecutar el script mientras el Scheduler de playlist pueda estar corriendo.
+1. Con la cuenta propietaria (en Development Mode se requiere Spotify **Premium**), crear una app en el Spotify Developer Dashboard, elegir la Web API y registrar la redirect URI `http://127.0.0.1:8888/callback` (IP loopback literal; `localhost` no se acepta). El client id y el secret están en la configuración de la app.
+2. Ejecutar `bash scripts/setup-github-secrets.sh` y aceptar la autorización OAuth. Pide solo `playlist-modify-public` y `playlist-read-private` (listar las playlists de la cuenta para encontrar una por nombre lo exige, aunque sean públicas; en Development Mode `GET /users/{id}/playlists` responde 403), abre un servidor temporal en `127.0.0.1:8888` y guarda el refresh token en GitHub (y en Parameter Store si se pide) sin imprimirlo. WSL 2 reenvía `127.0.0.1` al navegador de Windows.
+3. El refresh token puede revocarse o vencer; la sincronización falla entonces con `invalid_grant` y hay que repetir el paso 2 y después **sync-secrets**. Un token conserva los scopes concedidos al emitirse: después de un cambio de scopes, reautorizar antes de la próxima sincronización. Para reautorizar sin volver a escribir las credenciales de la app: `AWS_PROFILE=architect AWS_REGION=us-east-1 node scripts/spotify-authorize.ts --from-ssm --github-secret --store`.
+
+4. `AWS_PROFILE=PERFIL_AUTORIZADO node scripts/playlist.ts sync` es un dry-run: no modifica playlists ni registros de sincronización, y solo considera días terminados en todas las zonas (desde las 12:00 UTC de D+1). Con un registro guardado de la playlist del año, lee la playlist real y reporta lo que agregaría; sin registro, no consulta Spotify y el resultado es una cota superior (al escribir se reutiliza una playlist existente con el mismo nombre en vez de duplicarla). Su única escritura posible es guardar en Parameter Store un refresh token que Spotify haya rotado (requiere `ssm:PutParameter`), porque descartarlo podría invalidar la autorización. Si ese guardado falla, la ejecución se aborta (código 1). `--write` es la única forma de crear playlists o agregar canciones. Si el script rota y guarda el token mientras una Lambda de playlist está caliente, esa instancia sigue con el token anterior hasta un arranque en frío: no ejecutar el script mientras el Scheduler de playlist pueda estar corriendo.
+
+### Herramientas del operador
+
+CLIs privados con un `AWS_PROFILE` autorizado; ninguno se expone por HTTP y ningún rol de Lambda puede ejecutarlos.
+
+- `node scripts/catalog.ts list [--json]`: todo el catálogo en orden de fecha con estado (`published`, `prepared`, `incomplete`), título, artista, ID de Spotify, nota y fechas sin canción. Solo lee.
+- `node scripts/maintenance.ts replace --date=AAAA-MM-DD --file=cancion.json [--write]`: reemplaza una canción cuya fecha todavía no empezó en ninguna zona (UTC+14), con la misma validación y reglas de repetición que `load-track`. Si la nueva no se puede guardar, devuelve la anterior e informa qué quedó en la fecha. `remove` rechaza las mismas fechas. Una canción publicada solo admite `edit-description`; una incompleta en una fecha ya iniciada sigue sin publicarse hasta que la corrija un administrador.
+- `node scripts/spotify-check.ts <search|track|verify-catalog> [--market=XX]`: consultas de solo lectura a Spotify con las credenciales de la app; `verify-catalog` comprueba que los IDs de Spotify próximos sigan existiendo y coincidan.
+- `node scripts/playlist.ts info`: cuenta autorizada y playlists anuales registradas con su titular.
+- `node scripts/playlist.ts rehearse [--write] [--playlist-id=ID] [--sample=archivo.json] [--now=ISO]`: corre la sincronización real contra una playlist de ensayo de la cuenta autorizada, con canciones de muestra en memoria. Por defecto usa la playlist pública `Daywave - Test` de la cuenta (con `--write` la crea si falta; rechaza nombres de playlist anual), una muestra integrada de tres canciones conocidas que se resuelven en Spotify con fechas 2027-01-01 a 2027-01-03, y el reloj `2027-01-03T12:30:00Z`, así que solo entran las dos primeras fechas. Rechaza playlists anuales registradas, playlists de otro titular y muestras con canciones del catálogo todavía no elegibles para una playlist pública; con `--write` corre dos veces y falla si la segunda agrega algo.
 
 ### CORS
 
-El workflow **deploy** recibe el input `cors_allowed_origins` (default `http://localhost:4200`) y lo pasa al synth como `CORS_ALLOWED_ORIGINS`. `infra/config.ts` es el único lugar que lo valida:
+`corsAllowedOrigins` de `deploy/production.json` llega al synth como `CORS_ALLOWED_ORIGINS`. `infra/config.ts` es el único lugar que lo valida:
 
-- Orígenes separados por coma (`esquema://host[:puerto]`, sin ruta ni barra final); los duplicados se ignoran.
-- Se rechaza `*`. Se exige `https`, salvo `http` para `localhost` / `127.0.0.1`.
-- Vacío = sin configuración CORS.
-- Cada despliegue define la lista **completa**: para sumar el dominio definitivo del frontend, ejecutá el workflow con `http://localhost:4200,https://<dominio>` (y quitá localhost cuando ya no haga falta). El resumen del run muestra la lista vigente; el change set muestra el cambio en la API.
+- Orígenes con forma `esquema://host[:puerto]`, sin ruta ni barra final; los duplicados se ignoran.
+- `*` se rechaza. Se exige `https`, salvo `http` para `localhost` / `127.0.0.1`.
+- Lista vacía = sin configuración CORS.
+- El archivo tiene la lista **completa**: para sumar el dominio definitivo del frontend, agregá `https://<dominio>` (y quitá localhost cuando ya no haga falta). El resumen del run muestra la lista vigente; el change set muestra el cambio en la API.
 
 Probalo con `curl -i -H "Origin: https://<origen>" <url-api>/api/tracks` y buscá `access-control-allow-origin`.
 

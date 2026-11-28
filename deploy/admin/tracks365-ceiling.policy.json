@@ -99,6 +99,28 @@
     {
       "Effect": "Allow",
       "Action": [
+        "ssm:GetParameterHistory"
+      ],
+      "Resource": [
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/refresh-token"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameters",
+        "ssm:PutParameter"
+      ],
+      "Resource": [
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/client-id",
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/client-secret",
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/refresh-token",
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/refresh-token-seed-sha256"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
         "lambda:InvokeFunction"
       ],
       "Resource": [

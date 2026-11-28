@@ -15,6 +15,7 @@ import {
   recordingClaimKey,
   TRACKS_PARTITION,
 } from './dynamo-repository.ts';
+import { isPublicSomewhere } from './publication.ts';
 import type { DailyTrack } from './types.ts';
 
 /**
@@ -507,19 +508,39 @@ async function put(
   );
 }
 
-export type RemoveResult = 'removed' | 'not-found';
+/** `published`: la fecha ya empezó en alguna zona; no se borra nada. */
+export type RemoveResult = 'removed' | 'not-found' | 'published';
 
 /**
  * Baja de una fecha: borra la canción, sus reservas (solo si siguen a nombre de esa fecha) y quita
  * la fecha de los registros de artista, todo en una transacción. Así la fecha y la canción quedan
  * realmente libres. Es la única forma soportada de limpiar datos de prueba o corregir una fecha.
  * Requiere `dynamodb:DeleteItem` en el perfil del operador (no en los roles de las Lambdas).
+ *
+ * Solo para fechas que todavía no empezaron en ninguna zona (UTC+14): una canción que alguien ya
+ * pudo ver no se borra ni se reemplaza por esta vía. El corte se vuelve a evaluar con `clock()`
+ * justo antes de la transacción, para que las lecturas no lo dejen atrás (la condición de DynamoDB
+ * no puede compararlo, así que queda solo el tiempo de envío). `now` fija un instante simulado.
  */
 export async function removeTrack(
   client: DynamoDBDocumentClient,
   tableName: string,
   date: IsoDate,
+  {
+    now,
+    clock = now ? () => now : () => new Date(),
+    expectedSpotifyTrackId,
+  }: {
+    now?: Date;
+    clock?: () => Date;
+    /**
+     * Solo borra si la fecha sigue teniendo esta canción (la que leyó quien llama). Compara el ID:
+     * una edición concurrente de la misma canción no se detecta (correr con los escritores detenidos).
+     */
+    expectedSpotifyTrackId?: string;
+  } = {},
 ): Promise<RemoveResult> {
+  if (isPublicSomewhere(date, clock())) return 'published';
   const read = async (pk: string, key: string) =>
     (
       await client.send(
@@ -528,6 +549,10 @@ export async function removeTrack(
     ).Item;
   const track = (await read(TRACKS_PARTITION, date)) as DailyTrack | undefined;
   if (!track) return 'not-found';
+  const changed = () => new Error(`Track ${date} changed while it was being removed; retry`);
+  if (expectedSpotifyTrackId !== undefined && track.spotifyTrackId !== expectedSpotifyTrackId) {
+    throw changed();
+  }
 
   const items: NonNullable<ConstructorParameters<typeof TransactWriteCommand>[0]['TransactItems']> =
     [
@@ -576,11 +601,12 @@ export async function removeTrack(
       },
     });
   }
+  if (isPublicSomewhere(date, clock())) return 'published';
   try {
     await client.send(new TransactWriteCommand({ TransactItems: items }));
   } catch (error) {
     if (error instanceof TransactionCanceledException) {
-      throw new Error(`Track ${date} changed while it was being removed; retry`, { cause: error });
+      throw new Error(changed().message, { cause: error });
     }
     throw error;
   }

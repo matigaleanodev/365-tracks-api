@@ -42,14 +42,14 @@ describe('createSpotifyPlaylistClient', () => {
       if (url.pathname === '/v1/me') return json({ id: 'owner' });
       return json({
         items: [
-          { id: PLAYLIST_ID, name: '365 Tracks 2027', owner: { id: 'someone-else' } },
-          { id: 'pl00000000000000000002', name: '365 Tracks 2027', owner: { id: 'owner' } },
+          { id: PLAYLIST_ID, name: 'Daywave 2027', owner: { id: 'someone-else' } },
+          { id: 'pl00000000000000000002', name: 'Daywave 2027', owner: { id: 'owner' } },
         ],
         total: 2,
         next: null,
       });
     });
-    await expect(client.findOwnedByName('365 Tracks 2027')).resolves.toEqual({
+    await expect(client.findOwnedByName('Daywave 2027')).resolves.toEqual({
       id: 'pl00000000000000000002',
       url: 'https://open.spotify.com/playlist/pl00000000000000000002',
     });
@@ -72,7 +72,7 @@ describe('createSpotifyPlaylistClient', () => {
         offset: first ? 0 : 50,
       });
     });
-    await expect(client.findOwnedByName('365 Tracks 2027')).resolves.toBeNull();
+    await expect(client.findOwnedByName('Daywave 2027')).resolves.toBeNull();
     expect(calls(fetchMock).filter((c) => c.url.pathname === '/v1/me/playlists')).toHaveLength(2);
   });
 

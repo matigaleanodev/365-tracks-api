@@ -4,6 +4,8 @@
 //   AWS_PROFILE=<perfil> node scripts/maintenance.ts repair --plan-out=plan.json  (plan: no escribe)
 //   AWS_PROFILE=<perfil> node scripts/maintenance.ts repair --plan=plan.json --write  (aplica ese plan)
 //   AWS_PROFILE=<perfil> node scripts/maintenance.ts remove --date=2099-12-31 --write
+//   AWS_PROFILE=<perfil> node scripts/maintenance.ts replace --date=2027-03-01 --file=nueva.json [--write]
+// `remove` y `replace` rechazan fechas que ya empezaron en alguna zona (UTC+14).
 //   AWS_PROFILE=<perfil> node scripts/maintenance.ts edit-description --date=2027-03-01 \
 //     --description-file=nueva.txt [--expected-file=actual.txt] [--write]   (sin --write: compara)
 // Correr con TODOS los escritores detenidos (schedules, load-track): la auditoría es una instantánea. `reindex` es obligatorio antes de habilitar los
@@ -15,6 +17,8 @@ import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { REGION, TABLE_NAME } from '../infra/delivery.ts';
 import { findDescriptionIssues } from '../src/tracks/description.ts';
 import { editTrackDescription } from '../src/tracks/edit-description.ts';
+import { DynamoTrackRepository } from '../src/tracks/dynamo-repository.ts';
+import { replaceTrack } from '../src/tracks/replace-track.ts';
 import { TRACKS_PARTITION } from '../src/tracks/dynamo-repository.ts';
 import {
   applyControlRepair,
@@ -35,6 +39,7 @@ const { values, positionals } = parseArgs({
     'description-file': { type: 'string' },
     'expected-file': { type: 'string' },
     plan: { type: 'string' },
+    file: { type: 'string' },
     'plan-out': { type: 'string' },
   },
 });
@@ -49,10 +54,11 @@ if (
   command !== 'reindex' &&
   command !== 'repair' &&
   command !== 'remove' &&
+  command !== 'replace' &&
   command !== 'edit-description'
 ) {
   fail(
-    'Usage: node scripts/maintenance.ts <reindex|repair [--plan-out=PATH|--plan=PATH]|remove --date=YYYY-MM-DD|edit-description --date=YYYY-MM-DD --description-file=PATH> [--write]',
+    'Usage: node scripts/maintenance.ts <reindex|repair [--plan-out=PATH|--plan=PATH]|remove --date=YYYY-MM-DD|replace --date=YYYY-MM-DD --file=PATH|edit-description --date=YYYY-MM-DD --description-file=PATH> [--write]',
   );
 }
 const profile = process.env.AWS_PROFILE;
@@ -164,6 +170,71 @@ if (command === 'edit-description') {
   );
 }
 
+const publishedMessage = `${date} already started in some time zone: it is public and cannot be removed or replaced (only edit-description).`;
+
+if (command === 'replace') {
+  const file = values.file;
+  if (!file) fail('--file=<track.json> is required (same format as load-track)');
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (error) {
+    fail(`Cannot read ${file} as JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const result = await replaceTrack({
+    client,
+    tableName: TABLE_NAME,
+    repository: new DynamoTrackRepository(client, TABLE_NAME),
+    date,
+    raw,
+    now: new Date(),
+    clock: () => new Date(),
+    write: values.write,
+  });
+  switch (result.status) {
+    case 'invalid':
+      fail(`invalid (nothing written):\n${result.errors.map((e) => `- ${e}`).join('\n')}`);
+      break;
+    case 'published':
+      fail(publishedMessage);
+      break;
+    case 'not-found':
+      fail(`not-found · ${date}: nothing to replace; use load-track to fill an empty date.`);
+      break;
+    case 'valid':
+      console.log(
+        `current:  ${result.previous.title} — ${result.previous.artist} (${result.previous.spotifyTrackId})`,
+      );
+      console.log(
+        `new:      ${result.track.title} — ${result.track.artist} (${result.track.spotifyTrackId})`,
+      );
+      console.log('valid: add --write to replace (repetition rules are checked when writing).');
+      break;
+    case 'replaced':
+      console.log(`replaced · ${date}: ${result.previous.title} → ${result.track.title}`);
+      break;
+    case 'conflict':
+    case 'error': {
+      console.error(
+        result.status === 'conflict'
+          ? `conflict (new track not saved): ${result.errors.join('; ')}`
+          : `error while replacing (the removal or the new save may or may not have been applied): ${result.error}`,
+      );
+      const occupant = {
+        new: `${date} now holds the NEW track.`,
+        previous: `${date} holds the previous track.`,
+        empty: `${date} is EMPTY: reload the previous track with load-track.`,
+        other: `${date} holds a different track (another writer): review it with catalog.ts list.`,
+        unknown: `could not read ${date}: check it with catalog.ts list before doing anything else.`,
+      }[result.now];
+      fail(occupant);
+    }
+  }
+  process.exit(0);
+}
+
 if (!values.write)
   fail('remove deletes data: add --write to confirm (point-in-time recovery is on).');
-console.log(`${await removeTrack(client, TABLE_NAME, date)} · ${date}`);
+const removed = await removeTrack(client, TABLE_NAME, date);
+if (removed === 'published') fail(publishedMessage);
+console.log(`${removed} · ${date}`);

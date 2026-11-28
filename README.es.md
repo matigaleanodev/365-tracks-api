@@ -1,7 +1,7 @@
 # 365-tracks-api
 
 [![CI](https://img.shields.io/github/actions/workflow/status/matigaleanodev/365-tracks-api/ci.yml?style=flat-square&label=CI)](https://github.com/matigaleanodev/365-tracks-api/actions/workflows/ci.yml)
-![Versión](https://img.shields.io/badge/versi%C3%B3n-0.2.0-blue?style=flat-square)
+![Versión](https://img.shields.io/badge/versi%C3%B3n-1.0.0-blue?style=flat-square)
 ![Node.js](https://img.shields.io/badge/Node.js-24-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-6.0-3178C6?style=flat-square&logo=typescript&logoColor=white)
 ![AWS Lambda](https://img.shields.io/badge/AWS-Lambda-FF9900?style=flat-square&logo=awslambda&logoColor=white)

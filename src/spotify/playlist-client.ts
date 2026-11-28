@@ -39,6 +39,13 @@ export interface PlaylistRef {
   url: string;
 }
 
+/** Identidad de una playlist: para comprobar ID y titular antes de escribir. */
+export interface PlaylistInfo extends PlaylistRef {
+  name: string;
+  ownerId: string;
+  isPublic: boolean | null;
+}
+
 export interface CreatePlaylistInput {
   name: string;
   description: string;
@@ -47,6 +54,10 @@ export interface CreatePlaylistInput {
 
 /** Operaciones de la cuenta propietaria. Requiere un token de usuario (refresh token). */
 export interface SpotifyPlaylistClient {
+  /** ID de la cuenta autorizada (la titular de las playlists que se escriben). */
+  currentUserId(): Promise<string>;
+  /** Nombre, titular y visibilidad de una playlist por su ID. Solo lee. */
+  describe(playlistId: string): Promise<PlaylistInfo>;
   /** Busca entre las playlists de la cuenta propietaria; permite reutilizar en vez de duplicar. */
   findOwnedByName(name: string): Promise<PlaylistRef | null>;
   create(input: CreatePlaylistInput, guard?: WriteGuard): Promise<PlaylistRef>;
@@ -217,6 +228,25 @@ export function createSpotifyPlaylistClient({
   };
 
   return {
+    currentUserId: getOwnerId,
+
+    async describe(playlistId) {
+      assertPlaylistId(playlistId);
+      const json = await call(
+        'Spotify get playlist',
+        `/playlists/${playlistId}?fields=id,name,public,owner(id)`,
+      );
+      if (!isRecord(json)) throw new SpotifyMetadataError('a playlist');
+      assertPlaylistEntry(json);
+      const owner = json.owner as Record<string, unknown>;
+      return {
+        ...toRef(json),
+        name: json.name as string,
+        ownerId: owner.id as string,
+        isPublic: typeof json.public === 'boolean' ? json.public : null,
+      };
+    },
+
     async findOwnedByName(name) {
       const owner = await getOwnerId();
       let found: PlaylistRef | null = null;

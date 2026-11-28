@@ -33,7 +33,7 @@ export function playlistYear(date: IsoDate): number {
   return Number(date.slice(0, 4));
 }
 
-export const playlistName = (year: number) => `365 Tracks ${year}`;
+export const playlistName = (year: number) => `Daywave ${year}`;
 
 export const playlistDescription = (year: number) =>
-  `Una canción por día de 365 Tracks ${year}. Se agregan canciones de días anteriores, nunca la del día.`;
+  `Una canción por día de Daywave ${year}. Se agregan canciones de días anteriores, nunca la del día.`;

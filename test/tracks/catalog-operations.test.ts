@@ -178,6 +178,34 @@ describe('reemplazo de una canción', () => {
     expect(result).toMatchObject({ status: 'error', error: 'throttled', now: 'empty' });
   });
 
+  it('con el mismo ID de Spotify, una restauración no se informa como reemplazo', async () => {
+    const dynamo = fakeDynamo();
+    const old = preparedTrack('2027-03-01', 1);
+    await dynamo.repository.create(old);
+    const create = dynamo.repository.create.bind(dynamo.repository);
+    let calls = 0;
+    // La nueva (misma canción, otra nota) falla sin escribirse; la anterior se restaura.
+    dynamo.repository.create = (track) => {
+      calls += 1;
+      return calls === 1 ? Promise.reject(new Error('throttled')) : create(track);
+    };
+    const raw = input({ ...old, description: `${old.description ?? ''} Nota corregida a mano.` });
+    const result = await run(dynamo, raw, true);
+    expect(result).toMatchObject({ status: 'error', now: 'previous' });
+    expect((await dynamo.repository.getByDate('2027-03-01'))?.description).toBe(old.description);
+  });
+
+  it('un fallo de la baja informa qué quedó en la fecha', async () => {
+    const dynamo = fakeDynamo();
+    await dynamo.repository.create(preparedTrack('2027-03-01', 1));
+    dynamo.transactions.mockImplementationOnce(() => {
+      throw new Error('connection reset');
+    });
+    const result = await run(dynamo, input(preparedTrack('2027-03-01', 2)), true);
+    expect(result).toMatchObject({ status: 'error', error: 'connection reset', now: 'previous' });
+    expect((await dynamo.repository.getByDate('2027-03-01'))?.title).toBe('Title 1');
+  });
+
   it('una nota inválida no toca la tabla', async () => {
     const dynamo = fakeDynamo();
     await dynamo.repository.create(preparedTrack('2027-03-01', 1));

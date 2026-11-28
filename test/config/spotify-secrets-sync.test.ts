@@ -142,6 +142,21 @@ describe('createRotationPersister', () => {
     expect(values.get(TOKEN)).toBe('token-3');
   });
 
+  it('compara sin espacios y, si la escritura falla, relee lo que quedó y propaga el error', async () => {
+    const { store, values } = memoryStore({ [TOKEN]: ' token-1 ' });
+    const persist = createRotationPersister(store, TOKEN, 'token-1');
+    const put = store.put;
+    store.put = async (name, value) => {
+      await put(name, value);
+      throw new Error('timeout');
+    };
+    await expect(persist('token-2')).rejects.toThrow('timeout');
+    expect(values.get(TOKEN)).toBe('token-2');
+    store.put = put;
+    // La escritura sí se aplicó: la próxima rotación no la confunde con un reemplazo ajeno.
+    await expect(persist('token-3')).resolves.toBe(true);
+  });
+
   it('una instancia caliente no pisa un token que otro proceso reemplazó', async () => {
     const { store, values, writes } = memoryStore({ [TOKEN]: 'token-1' });
     const persist = createRotationPersister(store, TOKEN, 'token-1');

@@ -69,8 +69,14 @@ export async function replaceTrack({
   if (!previous) return { status: 'not-found' };
   if (!write) return { status: 'valid', previous, track };
 
-  const removed = await removeTrack(client, tableName, date, { now });
-  if (removed !== 'removed') return { status: removed };
+  // Igualdad de todo lo persistido: un reemplazo puede conservar el ID de Spotify y cambiar el resto.
+  const fields = (value: DailyTrack) =>
+    JSON.stringify(
+      Object.entries(value)
+        .filter(([, field]) => field !== undefined)
+        .sort(),
+    );
+  const same = (a: DailyTrack, b: DailyTrack) => fields(a) === fields(b);
 
   // Devuelve la anterior si la fecha quedó libre y relee qué quedó: nunca informa a ciegas.
   const settle = async (): Promise<DateOccupant> => {
@@ -82,13 +88,27 @@ export async function replaceTrack({
     try {
       const current = await repository.getByDate(date);
       if (!current) return 'empty';
-      if (current.spotifyTrackId === track.spotifyTrackId) return 'new';
-      if (current.spotifyTrackId === previous.spotifyTrackId) return 'previous';
+      if (same(current, track)) return 'new';
+      if (same(current, previous)) return 'previous';
       return 'other';
     } catch {
       return 'unknown';
     }
   };
+
+  let removed;
+  try {
+    removed = await removeTrack(client, tableName, date, { now });
+  } catch (error) {
+    // La baja pudo haberse aplicado (respuesta perdida): misma recuperación que un alta fallida.
+    return {
+      status: 'error',
+      error: error instanceof Error ? error.message : String(error),
+      previous,
+      now: await settle(),
+    };
+  }
+  if (removed !== 'removed') return { status: removed };
 
   let created;
   try {

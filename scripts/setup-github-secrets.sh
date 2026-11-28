@@ -33,18 +33,36 @@ ask '¿Continuar?' || exit 0
 
 # Deja un entorno limitado a `main` (política de ramas propia con `main` como única rama). El
 # cuerpo JSON fija el resto de la configuración del entorno. Idempotente.
+# Políticas de ramas de un entorno como `tipo:nombre`. Un entorno que todavía no existe (404) no
+# tiene ninguna; cualquier otro error corta el script.
+branch_policies() {
+  local out
+  if ! out=$(gh api "repos/$REPO/environments/$1/deployment-branch-policies" \
+    --jq '.branch_policies[] | "\(.type // "branch"):\(.name)"' 2>&1); then
+    if [[ "$out" == *'HTTP 404'* ]]; then return 0; fi
+    echo "No se pudieron leer las políticas de ramas de $1." >&2
+    exit 1
+  fi
+  printf '%s' "$out"
+}
+only_main_or_fail() {
+  if [[ -n "$2" && "$2" != 'branch:main' ]]; then
+    echo "El entorno $1 admite otras ramas además de main; corregilo en Settings → Environments." >&2
+    exit 1
+  fi
+}
 restrict_to_main() {
   local environment=$1 body=$2 names
+  # Antes de tocar el entorno (por ejemplo, quitar revisores): si ya admite otras ramas, no cambia nada.
+  names=$(branch_policies "$environment")
+  only_main_or_fail "$environment" "$names"
   printf '%s' "$body" | gh api -X PUT "repos/$REPO/environments/$environment" --input - > /dev/null
-  names=$(gh api "repos/$REPO/environments/$environment/deployment-branch-policies" \
-    --jq '.branch_policies[] | "\(.type // "branch"):\(.name)"')
+  names=$(branch_policies "$environment")
   if [[ -z "$names" ]]; then
     gh api -X POST "repos/$REPO/environments/$environment/deployment-branch-policies" \
       -f name=main -f type=branch > /dev/null
-  elif [[ "$names" != 'branch:main' ]]; then
-    echo "El entorno $environment admite otras ramas además de main; corregilo en Settings → Environments." >&2
-    exit 1
   fi
+  only_main_or_fail "$environment" "$names"
 }
 ONLY_MAIN='{"protected_branches": false, "custom_branch_policies": true}'
 

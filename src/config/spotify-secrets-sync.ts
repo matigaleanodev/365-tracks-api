@@ -138,14 +138,28 @@ export async function syncSpotifySecrets(
  * Guarda el refresh token que Spotify devolvió al renovar, salvo que el parámetro ya no tenga el
  * token del que partió esta instancia: entonces otro proceso (una sincronización o una
  * reautorización) lo reemplazó y pisarlo restauraría una autorización vieja. Devuelve false en ese
- * caso. Pensado para `onRefreshTokenRotated` de una instancia que puede seguir caliente.
+ * caso; un fallo al escribir se propaga. Pensado para `onRefreshTokenRotated` de una instancia que
+ * puede seguir caliente. Parameter Store no admite escrituras condicionales: queda una ventana
+ * mínima entre la lectura y la escritura, por eso no se sincroniza mientras corre la playlist.
  */
 export function createRotationPersister(store: ParameterStore, name: string, initial: string) {
   let known = initial;
   return async (rotated: string): Promise<boolean> => {
-    const current = (await store.getMany([name])).get(name);
+    const read = async () => (await store.getMany([name])).get(name)?.trim();
+    const current = await read();
     if (current !== undefined && current !== known) return false;
-    await store.put(name, rotated);
+    try {
+      await store.put(name, rotated);
+    } catch (error) {
+      // La escritura pudo haberse aplicado igual: se relee para no confundirla después con un
+      // reemplazo ajeno. El error se propaga: la rotación no quedó confirmada.
+      try {
+        if ((await read()) === rotated) known = rotated;
+      } catch {
+        // Sin relectura se conserva `known`; el error de arriba ya hace fallar la ejecución.
+      }
+      throw error;
+    }
     known = rotated;
     return true;
   };

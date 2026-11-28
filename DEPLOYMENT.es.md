@@ -137,6 +137,7 @@ La fuente de las credenciales de Spotify es el entorno `secrets` del repositorio
 - Valida que estén los tres secretos y que no estén vacíos antes de escribir nada; nunca escribe un valor vacío.
 - Es idempotente: escribe solo lo que difiere e imprime solo nombres de parámetros y acciones (`created`, `updated`, `unchanged`, `kept-rotated`).
 - Spotify puede devolver un refresh token nuevo cuando la Lambda de la playlist renueva el access token; la Lambda lo guarda en Parameter Store. El parámetro de huella guarda el SHA-256 del último valor sembrado desde GitHub: mientras `SPOTIFY_REFRESH_TOKEN` no cambie, una sincronización posterior conserva el token rotado (`kept-rotated`) en vez de restaurar el viejo. Un valor nuevo en GitHub (una autorización nueva) se siembra y lo reemplaza; un valor que Parameter Store ya tuvo en una versión anterior (su historial) nunca se restaura. A su vez, la Lambda no guarda una rotación si el parámetro ya no tiene el token del que partió (una instancia caliente después de una sincronización o de una autorización nueva).
+- Parameter Store no admite escrituras condicionales: no correr **sync-secrets** mientras el Scheduler de la playlist pueda estar corriendo.
 - Los despliegues de código no dependen de este workflow. Se corre en la carga inicial y después de cada rotación.
 
 Carga inicial o rotación, desde WSL en la raíz del repositorio (requiere `gh` autenticado con permisos de administración del repositorio, Node 24 y `npm ci`):
@@ -151,11 +152,14 @@ El script pide los valores sin eco y los pasa a `gh secret set` por stdin, así 
 gh workflow run sync-secrets.yml --repo matigaleanodev/365-tracks-api --ref main
 ```
 
-Los parámetros de OpenAI se siguen creando a mano:
+Los parámetros de OpenAI se siguen creando a mano. La key se lee sin eco para que no quede en el historial:
 
 ```bash
-aws --profile PERFIL_ADMIN --region us-east-1 ssm put-parameter --type SecureString \
-  --name /tracks365/openai/model --value "<modelo>"        # no pegar secretos en terminales compartidas
+bash -c 'read -rs -p "API key de OpenAI: " key; echo; [[ -n $key ]] || exit 1
+  aws --profile PERFIL_ADMIN --region us-east-1 ssm put-parameter --type SecureString --overwrite \
+    --name /tracks365/openai/api-key --value file:///dev/stdin <<< "$key"'
+aws --profile PERFIL_ADMIN --region us-east-1 ssm put-parameter --type SecureString --overwrite \
+  --name /tracks365/openai/model --value "<modelo>"
 ```
 
 ### Configuración manual en Spotify Developer

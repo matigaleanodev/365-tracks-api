@@ -137,6 +137,7 @@ The source of the Spotify credentials is the `secrets` environment of the GitHub
 - It validates that all three secrets exist and are not empty before writing anything; it never writes an empty value.
 - It is idempotent: it writes only what differs, and prints only parameter names and actions (`created`, `updated`, `unchanged`, `kept-rotated`).
 - Spotify can return a new refresh token when the playlist Lambda renews the access token; the Lambda saves it in Parameter Store. The seed parameter keeps the SHA-256 of the last value seeded from GitHub: while `SPOTIFY_REFRESH_TOKEN` does not change, a later sync keeps the rotated token (`kept-rotated`) instead of restoring the old one. A new value in GitHub (a new authorization) is seeded and replaces it; a value that Parameter Store already held in an earlier version (its history) is never restored. The Lambda, in turn, does not save a rotation if the parameter no longer holds the token it started from (a warm instance after a sync or a new authorization).
+- Parameter Store has no conditional writes, so do not run **sync-secrets** while the playlist Scheduler may be running.
 - Code deployments do not depend on this workflow. It runs for the initial load and after each rotation.
 
 Initial load or rotation, from WSL at the repository root (needs `gh` authenticated with admin access to the repository, Node 24 and `npm ci`):
@@ -151,11 +152,14 @@ The script asks for the values without echo and sends them to `gh secret set` th
 gh workflow run sync-secrets.yml --repo matigaleanodev/365-tracks-api --ref main
 ```
 
-The OpenAI parameters are still created by hand:
+The OpenAI parameters are still created by hand. The key is read without echo so it stays out of the history:
 
 ```bash
-aws --profile PERFIL_ADMIN --region us-east-1 ssm put-parameter --type SecureString \
-  --name /tracks365/openai/model --value "<model>"        # do not paste secrets in shared terminals
+bash -c 'read -rs -p "OpenAI API key: " key; echo; [[ -n $key ]] || exit 1
+  aws --profile PERFIL_ADMIN --region us-east-1 ssm put-parameter --type SecureString --overwrite \
+    --name /tracks365/openai/api-key --value file:///dev/stdin <<< "$key"'
+aws --profile PERFIL_ADMIN --region us-east-1 ssm put-parameter --type SecureString --overwrite \
+  --name /tracks365/openai/model --value "<model>"
 ```
 
 ### Spotify Developer setup (manual)

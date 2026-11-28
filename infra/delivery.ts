@@ -40,6 +40,8 @@ export const SSM_PARAMETERS = {
   spotifyClientId: `${SSM_PREFIX}/spotify/client-id`,
   spotifyClientSecret: `${SSM_PREFIX}/spotify/client-secret`,
   spotifyRefreshToken: `${SSM_PREFIX}/spotify/refresh-token`,
+  /** SHA-256 del último refresh token sembrado desde GitHub (SecureString como el resto; no permite reconstruir el token). */
+  spotifyRefreshTokenSeed: `${SSM_PREFIX}/spotify/refresh-token-seed-sha256`,
   openaiApiKey: `${SSM_PREFIX}/openai/api-key`,
   openaiModel: `${SSM_PREFIX}/openai/model`,
   criteriaWeights: `${SSM_PREFIX}/selection/criteria-weights`,
@@ -56,6 +58,7 @@ export const ROLE_NAMES = [
   'cloudformation',
   'prepare',
   'execute',
+  'secrets',
 ] as const;
 export type RoleName = (typeof ROLE_NAMES)[number];
 
@@ -67,8 +70,17 @@ export const CEILING_NAME = `${PREFIX}ceiling`;
 export const CEILING = `arn:aws:iam::${ACCOUNT}:policy/${CEILING_NAME}`;
 export const OIDC_PROVIDER = `arn:aws:iam::${ACCOUNT}:oidc-provider/token.actions.githubusercontent.com`;
 
-/** Entornos de GitHub: `plan` sin aprobación, `production` y `foundation` con revisores. */
-export const ENVIRONMENTS = { plan: 'plan', production: 'production', foundation: 'foundation' };
+/**
+ * Entornos de GitHub; los workflows solo corren desde `main`. `plan` y `production` no llevan
+ * revisores: la autorización del despliegue es el merge del release en `main`. `secrets` tampoco:
+ * su único workflow es manual. `foundation` conserva revisores porque cambia roles IAM.
+ */
+export const ENVIRONMENTS = {
+  plan: 'plan',
+  production: 'production',
+  foundation: 'foundation',
+  secrets: 'secrets',
+};
 
 type Json = Record<string, unknown>;
 
@@ -159,6 +171,21 @@ export function rolePolicies(): Record<RoleName, Json[]> {
         ].map(parameterArn),
       ),
       allow(['ssm:PutParameter'], [parameterArn(SSM_PARAMETERS.spotifyRefreshToken)]),
+    ],
+    // Sincronización de credenciales de Spotify desde GitHub Secrets: solo estos parámetros. Lee para
+    // no reescribir valores iguales y para respetar un refresh token que Spotify ya rotó.
+    secrets: [
+      // Historial solo del refresh token: detecta un valor de la fuente que ya fue reemplazado.
+      allow(['ssm:GetParameterHistory'], [parameterArn(SSM_PARAMETERS.spotifyRefreshToken)]),
+      allow(
+        ['ssm:GetParameters', 'ssm:PutParameter'],
+        [
+          SSM_PARAMETERS.spotifyClientId,
+          SSM_PARAMETERS.spotifyClientSecret,
+          SSM_PARAMETERS.spotifyRefreshToken,
+          SSM_PARAMETERS.spotifyRefreshTokenSeed,
+        ].map(parameterArn),
+      ),
     ],
     scheduler: [
       allow(
@@ -298,6 +325,8 @@ export const roleTrust = (name: RoleName): Json => {
       return githubTrust(ENVIRONMENTS.plan);
     case 'execute':
       return githubTrust(ENVIRONMENTS.production);
+    case 'secrets':
+      return githubTrust(ENVIRONMENTS.secrets);
   }
 };
 

@@ -51,6 +51,20 @@ describe('modelo de entrega', () => {
     expect(subject('execute')).toMatch(/@1466117945:environment:production$/);
   });
 
+  it('el rol de secretos solo lee y escribe los parámetros de Spotify, desde el entorno secrets', () => {
+    const arn = (name: string) =>
+      `arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/${name}`;
+    const [history, readWrite, ...rest] = rolePolicies().secrets as Statement[];
+    expect(rest).toEqual([]);
+    expect(history!.Action).toEqual(['ssm:GetParameterHistory']);
+    expect(history!.Resource).toEqual([arn('refresh-token')]);
+    expect(readWrite!.Action).toEqual(['ssm:GetParameters', 'ssm:PutParameter']);
+    expect(readWrite!.Resource).toEqual(
+      ['client-id', 'client-secret', 'refresh-token', 'refresh-token-seed-sha256'].map(arn),
+    );
+    expect(trustSubject('secrets')).toMatch(/@1466117945:environment:secrets$/);
+  });
+
   it('la fundación crea solo roles bajo boundary y un bucket privado retenido', () => {
     const template = Template.fromStack(new FoundationStack(new App(), 'Foundation'));
     const roles = Object.values(template.findResources('AWS::IAM::Role'));
@@ -88,7 +102,10 @@ describe('modelo de entrega', () => {
 });
 
 function roleTrustSubject(name: 'prepare' | 'execute'): string {
-  const environment = name === 'prepare' ? 'plan' : 'production';
+  return trustSubject(name === 'prepare' ? 'plan' : 'production');
+}
+
+function trustSubject(environment: string): string {
   const trust = githubTrust(environment) as {
     Statement: { Condition: { StringEquals: Record<string, string> } }[];
   };

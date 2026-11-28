@@ -1,3 +1,4 @@
+import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { describe, expect, it } from 'vitest';
 import { listCatalog } from '../../src/tracks/catalog-list.ts';
 import { removeTrack } from '../../src/tracks/maintenance.ts';
@@ -243,6 +244,25 @@ describe('reemplazo de una canción', () => {
     });
     const result = await run(dynamo, input(preparedTrack('2027-03-01', 2)), true);
     expect(result).toMatchObject({ status: 'error', error: 'connection reset', now: 'previous' });
+    expect((await dynamo.repository.getByDate('2027-03-01'))?.title).toBe('Title 1');
+  });
+
+  it('una baja aplicada con la respuesta perdida restaura la anterior', async () => {
+    const dynamo = fakeDynamo();
+    await dynamo.repository.create(preparedTrack('2027-03-01', 1));
+    const send = dynamo.client.send.bind(dynamo.client);
+    let lost = false;
+    // La baja se aplica, pero la respuesta no llega.
+    dynamo.client.send = (async (command: unknown) => {
+      const output = await send(command as never);
+      if (!lost && command instanceof TransactWriteCommand) {
+        lost = true;
+        throw new Error('socket hang up');
+      }
+      return output;
+    }) as typeof dynamo.client.send;
+    const result = await run(dynamo, input(preparedTrack('2027-03-01', 2)), true);
+    expect(result).toMatchObject({ status: 'error', error: 'socket hang up', now: 'previous' });
     expect((await dynamo.repository.getByDate('2027-03-01'))?.title).toBe('Title 1');
   });
 

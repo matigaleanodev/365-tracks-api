@@ -553,7 +553,16 @@ describe('replaceTrack (operador)', () => {
     const old = track(date, 1);
     expect(await repo.create(old)).toBe('created');
     const replace = (raw: unknown, now: Date) =>
-      replaceTrack({ client, tableName, repository: repo, date, raw, now, write: true });
+      replaceTrack({
+        client,
+        tableName,
+        repository: repo,
+        date,
+        raw,
+        now,
+        clock: () => now,
+        write: true,
+      });
 
     // 10:00 UTC del día anterior: la fecha ya empezó en UTC+14 y no se toca.
     const started = new Date(`${addDays(date, -1)}T10:00:00Z`);

@@ -16,6 +16,8 @@ export interface ReplaceTrackInput {
   /** La canción nueva, con el mismo formato que una carga manual. */
   raw: unknown;
   now: Date;
+  /** Reloj para volver a evaluar el corte justo antes de la baja (en producción, el real). */
+  clock: () => Date;
   /** Sin `write` solo valida y compara: no escribe nada. */
   write: boolean;
 }
@@ -55,6 +57,7 @@ export async function replaceTrack({
   date,
   raw,
   now,
+  clock,
   write,
 }: ReplaceTrackInput): Promise<ReplaceTrackResult> {
   const parsed = parseTrackInput(raw, now);
@@ -98,7 +101,7 @@ export async function replaceTrack({
 
   let removed;
   try {
-    removed = await removeTrack(client, tableName, date, { now });
+    removed = await removeTrack(client, tableName, date, { now, clock });
   } catch (error) {
     // La baja pudo haberse aplicado (respuesta perdida): misma recuperación que un alta fallida.
     return {

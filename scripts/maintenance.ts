@@ -188,6 +188,7 @@ if (command === 'replace') {
     date,
     raw,
     now: new Date(),
+    clock: () => new Date(),
     write: values.write,
   });
   switch (result.status) {

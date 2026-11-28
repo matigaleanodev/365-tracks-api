@@ -518,15 +518,17 @@ export type RemoveResult = 'removed' | 'not-found' | 'published';
  * Requiere `dynamodb:DeleteItem` en el perfil del operador (no en los roles de las Lambdas).
  *
  * Solo para fechas que todavía no empezaron en ninguna zona (UTC+14): una canción que alguien ya
- * pudo ver no se borra ni se reemplaza por esta vía.
+ * pudo ver no se borra ni se reemplaza por esta vía. El corte se vuelve a evaluar con `clock()`
+ * justo antes de la transacción, para que las lecturas no lo dejen atrás (la condición de DynamoDB
+ * no puede compararlo, así que queda solo el tiempo de envío). `now` fija un instante simulado.
  */
 export async function removeTrack(
   client: DynamoDBDocumentClient,
   tableName: string,
   date: IsoDate,
-  { now = new Date() }: { now?: Date } = {},
+  { now, clock = now ? () => now : () => new Date() }: { now?: Date; clock?: () => Date } = {},
 ): Promise<RemoveResult> {
-  if (isPublicSomewhere(date, now)) return 'published';
+  if (isPublicSomewhere(date, clock())) return 'published';
   const read = async (pk: string, key: string) =>
     (
       await client.send(
@@ -583,6 +585,7 @@ export async function removeTrack(
       },
     });
   }
+  if (isPublicSomewhere(date, clock())) return 'published';
   try {
     await client.send(new TransactWriteCommand({ TransactItems: items }));
   } catch (error) {

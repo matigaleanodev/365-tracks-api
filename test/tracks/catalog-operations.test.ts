@@ -85,6 +85,44 @@ describe('baja protegida', () => {
   });
 });
 
+describe('corte reevaluado antes de la baja', () => {
+  // El reloj avanza durante las lecturas: primero antes del corte, después ya empezado.
+  const advancing = () => {
+    let calls = 0;
+    return () => (calls++ === 0 ? BEFORE_KIRITIMATI : KIRITIMATI_STARTED);
+  };
+
+  it('removeTrack no borra si la fecha empezó mientras leía', async () => {
+    const dynamo = fakeDynamo();
+    await dynamo.repository.create(preparedTrack('2027-03-01', 1));
+
+    expect(
+      await removeTrack(dynamo.client, dynamo.table, '2027-03-01', { clock: advancing() }),
+    ).toBe('published');
+    expect(dynamo.items.has('TRACK|2027-03-01')).toBe(true);
+  });
+
+  it('replaceTrack tampoco reemplaza en ese caso', async () => {
+    const dynamo = fakeDynamo();
+    const previous = preparedTrack('2027-03-01', 1);
+    await dynamo.repository.create(previous);
+
+    const result = await replaceTrack({
+      client: dynamo.client,
+      tableName: dynamo.table,
+      repository: dynamo.repository,
+      date: '2027-03-01',
+      raw: input(preparedTrack('2027-03-01', 2)),
+      now: BEFORE_KIRITIMATI,
+      clock: advancing(),
+      write: true,
+    });
+
+    expect(result).toEqual({ status: 'published' });
+    expect(await dynamo.repository.getByDate('2027-03-01')).toEqual(previous);
+  });
+});
+
 describe('reemplazo de una canción', () => {
   const now = BEFORE_KIRITIMATI;
   const run = (dynamo: ReturnType<typeof fakeDynamo>, raw: unknown, write: boolean, at = now) =>
@@ -95,6 +133,7 @@ describe('reemplazo de una canción', () => {
       date: '2027-03-01',
       raw,
       now: at,
+      clock: () => at,
       write,
     });
 
@@ -134,6 +173,7 @@ describe('reemplazo de una canción', () => {
         date: '2027-04-01',
         raw: input(preparedTrack('2027-04-01', 3)),
         now,
+        clock: () => now,
         write: true,
       }),
     ).toEqual({ status: 'not-found' });

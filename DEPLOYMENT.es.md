@@ -60,7 +60,7 @@ aws --profile PERFIL_ADMIN --region us-east-1 iam put-role-policy --role-name tr
   --policy-document file://deploy/admin/tracks365-foundation-cloudformation.policy.json
 ```
 
-Una política gestionada guarda como máximo cinco versiones: si hace falta, borrar antes la más vieja que no sea la por defecto (`iam list-policy-versions`, `iam delete-policy-version`).
+Una política gestionada guarda como máximo cinco versiones: si hace falta, borrar antes la más vieja que no sea la por defecto (`iam list-policy-versions`, `iam delete-policy-version`). No puede superar 6144 caracteres sin espacios: `npm run admin:policies` compacta el ceiling sin cambiar sus permisos y un test verifica el tamaño.
 
 En cada comando, reemplazá `PERFIL_ADMIN` por un perfil local de AWS CLI con los permisos de administración necesarios. Antes de cada mutación, verificá la identidad y comprobá la cuenta y la región de destino:
 
@@ -197,9 +197,12 @@ Los datos no forman parte de ningún rollback: la tabla tiene `DeletionPolicy: R
 
 - **Falla el despliegue.** Si el change set falla, CloudFormation vuelve solo al template anterior y el job `execute` termina en error. Antes de reintentar, leé el estado real del stack (`aws --profile PERFIL_AUTORIZADO --region us-east-1 cloudformation describe-stacks --stack-name tracks365-api`): `UPDATE_ROLLBACK_COMPLETE` admite un nuevo despliegue; cualquier otro estado se revisa a mano. Un workflow fallido después de `execute` no implica que producción haya quedado sin cambios.
 - **Una versión publicada falla.** La corrección es un `release/x.x.x` nuevo hacia `main` con el arreglo o la reversión del cambio; el merge lo despliega con las mismas verificaciones. Para frenar los procesos editoriales, ese release deja `scheduleEnabled` y `playlistScheduleEnabled` en `false`.
-- **Orden con la fundación.** Los roles se agregan, nunca se reemplazan: una versión anterior de la API funciona con una fundación más nueva. No revertir la fundación ni el ceiling mientras la API desplegada use sus roles o permisos nuevos; primero se despliega la versión que ya no los necesita.
-- **Políticas administrativas.** Para volver a la versión anterior del ceiling, `iam list-policy-versions` y `iam set-default-policy-version --version-id vN` sobre `tracks365-ceiling` (las versiones anteriores se conservan). Para la política del rol de CloudFormation de la fundación, `iam put-role-policy` con la copia guardada antes del cambio.
-- **Fundación.** Un change set con el template anterior guardado, con los mismos comandos y comprobaciones de "Cambios de roles antes de un release".
+- **Orden obligatorio para revertir permisos.** Los roles se agregan, nunca se reemplazan: una versión anterior de la API funciona con una fundación más nueva, pero no al revés. Revertir en este orden, cada paso después de que el anterior terminó bien:
+  1. La API, a una versión que ya no use los roles ni los permisos nuevos (un release; mientras tanto CloudFormation necesita esos permisos para borrar los recursos que sobran).
+  2. La fundación, con un change set del template anterior guardado y las mismas comprobaciones de "Cambios de roles antes de un release".
+  3. La política `project` de `tracks365-foundation-cloudformation`, con `iam put-role-policy` y la copia guardada antes del cambio (la anterior no puede borrar los roles nuevos).
+  4. El ceiling: `iam list-policy-versions` y `iam set-default-policy-version --version-id vN` sobre `tracks365-ceiling` (las versiones anteriores se conservan).
+- **Rollback trabado.** Si un rollback de `tracks365-api` queda en `UPDATE_ROLLBACK_FAILED`, un administrador lo destraba con `cloudformation continue-update-rollback --stack-name tracks365-api` (y `--resources-to-skip` solo para recursos que se verificaron a mano); `tracks365-execute` no tiene ese permiso.
 
 ## Señales de salud del catálogo
 

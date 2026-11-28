@@ -57,6 +57,12 @@ export async function rehearsePlaylistSync({
   if (protectedPlaylistIds.includes(playlistId)) {
     throw new RehearsalRefusedError(`${playlistId} is a registered annual playlist`);
   }
+  // El repositorio en memoria usa la fecha como clave: una fecha repetida ocultaría una canción.
+  const dates = new Set<string>();
+  for (const { date } of sample) {
+    if (dates.has(date)) throw new RehearsalRefusedError(`the sample has a repeated date ${date}`);
+    dates.add(date);
+  }
   // Cada año se reconcilia por separado: con varios años en la misma playlist el orden se mezclaría.
   if (new Set(sample.map((track) => playlistYear(track.date))).size > 1) {
     throw new RehearsalRefusedError('the sample must belong to a single year');

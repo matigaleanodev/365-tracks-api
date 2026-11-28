@@ -107,6 +107,17 @@ jobs:
             grep -q "does not exist" change-set-error.txt || { cat change-set-error.txt; exit 1; }
             echo '{"Changes":[],"Status":"NO_CHANGES"}' > change-set.json
           fi
+          # CORS y Schedulers se informan también en un release sin cambios de infraestructura.
+          {
+            echo "CORS: \`${CORS_ALLOWED_ORIGINS:-(sin CORS)}\`"
+            echo
+            echo "#### Schedulers (estado sintetizado)"
+            echo
+            echo "| Scheduler | Estado | Hora UTC |"
+            echo "| --- | --- | --- |"
+            jq -r '.[] | (.cron | capture("^cron\\((?<m>[0-9]+) (?<h>[0-9]+) ") | "\(("0" + .h)[-2:]):\(("0" + .m)[-2:])") as $time | "| \(.name) | \(.state) | \($time) |"' <<< "$schedules"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
           if jq -e '.Status == "NO_CHANGES" or (.Status == "FAILED" and (.StatusReason // "" | test("didn.t contain changes|No updates are to be performed")))' change-set.json > /dev/null; then
             echo "noop=true" >> "$GITHUB_OUTPUT"
             echo "### Sin cambios en el stack: no hay change set que ejecutar" >> "$GITHUB_STEP_SUMMARY"
@@ -127,14 +138,6 @@ jobs:
           echo "changeset=$(jq -r .ChangeSetId change-set.json)" >> "$GITHUB_OUTPUT"
           {
             echo "### Change set \`$change_set\`"
-            echo
-            echo "CORS: \`${CORS_ALLOWED_ORIGINS:-(sin CORS)}\`"
-            echo
-            echo "#### Schedulers (estado sintetizado)"
-            echo
-            echo "| Scheduler | Estado | Hora UTC |"
-            echo "| --- | --- | --- |"
-            jq -r '.[] | (.cron | capture("^cron\\((?<m>[0-9]+) (?<h>[0-9]+) ") | "\(("0" + .h)[-2:]):\(("0" + .m)[-2:])") as $time | "| \(.name) | \(.state) | \($time) |"' <<< "$schedules"
             echo
             echo "#### Recursos"
             echo
@@ -209,6 +212,16 @@ jobs:
           if gh release view "$tag" > /dev/null 2>&1; then
             echo "La release $tag ya existe: no se modifica." >> "$GITHUB_STEP_SUMMARY"
             exit 0
+          fi
+          # Un tag existente se reutiliza solo si apunta al commit desplegado: `--target` no mueve un
+          # tag que ya existe. matching-refs devuelve una lista (vacía si no existe).
+          ref="refs/tags/$tag"
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag" \
+            --jq "map(select(.ref == \"$ref\")) | length")
+          if ((existing > 0)); then
+            tagged=$(gh api "repos/$GITHUB_REPOSITORY/commits/$ref" --jq .sha)
+            [[ "$tagged" == "$GITHUB_SHA" ]] ||
+              { echo "El tag $tag apunta a $tagged, no a $GITHUB_SHA: revisar la versión."; exit 1; }
           fi
           gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --generate-notes
           echo "Release $tag publicada sobre $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"

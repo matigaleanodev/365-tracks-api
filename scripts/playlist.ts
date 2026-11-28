@@ -125,7 +125,7 @@ if (command === 'info') {
       const info = await dependencies.playlists.describe(id);
       const items = await dependencies.playlists.listItems(id);
       console.log(
-        `${label} · ${info.id} · "${info.name}" · owner ${info.ownerId} · ${info.isPublic === false ? 'private' : 'public'} · ${items.length} items · ${info.url}`,
+        `${label} · ${info.id} · "${info.name}" · owner ${info.ownerId} · ${info.isPublic === true ? 'public' : info.isPublic === false ? 'private' : 'unknown'} · ${items.length} items · ${info.url}`,
       );
     };
     const records = await registeredPlaylists();

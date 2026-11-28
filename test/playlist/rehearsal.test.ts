@@ -192,6 +192,21 @@ describe('playlist de ensayo y muestra integrada', () => {
     ).rejects.toThrow(/single year/);
   });
 
+  it('rechaza una muestra con fechas repetidas', async () => {
+    const account = fakeAccount();
+    await expect(
+      rehearsePlaylistSync({
+        playlists: account.client,
+        playlistId: TEST_ID,
+        protectedPlaylistIds: [],
+        reservedTrackIds: [],
+        sample: [preparedTrack('2027-01-01', 1), preparedTrack('2027-01-01', 2)],
+        now: new Date('2027-01-03T12:30:00Z'),
+        dryRun: true,
+      }),
+    ).rejects.toThrow(/repeated date 2027-01-01/);
+  });
+
   it('nunca usa un nombre de playlist anual', async () => {
     const account = fakeAccount();
     await expect(

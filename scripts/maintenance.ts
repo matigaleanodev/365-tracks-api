@@ -218,11 +218,11 @@ if (command === 'replace') {
       console.error(
         result.status === 'conflict'
           ? `conflict (new track not saved): ${result.errors.join('; ')}`
-          : `error saving the new track (it may or may not have been written): ${result.error}`,
+          : `error while replacing (the removal or the new save may or may not have been applied): ${result.error}`,
       );
       const occupant = {
         new: `${date} now holds the NEW track.`,
-        previous: `previous track restored on ${date}.`,
+        previous: `${date} holds the previous track.`,
         empty: `${date} is EMPTY: reload the previous track with load-track.`,
         other: `${date} holds a different track (another writer): review it with catalog.ts list.`,
         unknown: `could not read ${date}: check it with catalog.ts list before doing anything else.`,

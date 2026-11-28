@@ -526,7 +526,19 @@ export async function removeTrack(
   client: DynamoDBDocumentClient,
   tableName: string,
   date: IsoDate,
-  { now, clock = now ? () => now : () => new Date() }: { now?: Date; clock?: () => Date } = {},
+  {
+    now,
+    clock = now ? () => now : () => new Date(),
+    expectedSpotifyTrackId,
+  }: {
+    now?: Date;
+    clock?: () => Date;
+    /**
+     * Solo borra si la fecha sigue teniendo esta canción (la que leyó quien llama). Compara el ID:
+     * una edición concurrente de la misma canción no se detecta (correr con los escritores detenidos).
+     */
+    expectedSpotifyTrackId?: string;
+  } = {},
 ): Promise<RemoveResult> {
   if (isPublicSomewhere(date, clock())) return 'published';
   const read = async (pk: string, key: string) =>
@@ -537,6 +549,10 @@ export async function removeTrack(
     ).Item;
   const track = (await read(TRACKS_PARTITION, date)) as DailyTrack | undefined;
   if (!track) return 'not-found';
+  const changed = () => new Error(`Track ${date} changed while it was being removed; retry`);
+  if (expectedSpotifyTrackId !== undefined && track.spotifyTrackId !== expectedSpotifyTrackId) {
+    throw changed();
+  }
 
   const items: NonNullable<ConstructorParameters<typeof TransactWriteCommand>[0]['TransactItems']> =
     [
@@ -590,7 +606,7 @@ export async function removeTrack(
     await client.send(new TransactWriteCommand({ TransactItems: items }));
   } catch (error) {
     if (error instanceof TransactionCanceledException) {
-      throw new Error(`Track ${date} changed while it was being removed; retry`, { cause: error });
+      throw new Error(changed().message, { cause: error });
     }
     throw error;
   }

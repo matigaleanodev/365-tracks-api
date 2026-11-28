@@ -101,7 +101,12 @@ export async function replaceTrack({
 
   let removed;
   try {
-    removed = await removeTrack(client, tableName, date, { now, clock });
+    removed = await removeTrack(client, tableName, date, {
+      now,
+      clock,
+      // Si otro escritor cambió la fecha después de leer `previous`, no se borra su canción.
+      expectedSpotifyTrackId: previous.spotifyTrackId,
+    });
   } catch (error) {
     // La baja pudo haberse aplicado (respuesta perdida): misma recuperación que un alta fallida.
     return {

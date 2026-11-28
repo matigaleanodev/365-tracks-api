@@ -246,6 +246,25 @@ describe('reemplazo de una canción', () => {
     expect((await dynamo.repository.getByDate('2027-03-01'))?.title).toBe('Title 1');
   });
 
+  it('no borra la canción que otro escritor puso después de leer la anterior', async () => {
+    const dynamo = fakeDynamo();
+    await dynamo.repository.create(preparedTrack('2027-03-01', 1));
+    const getByDate = dynamo.repository.getByDate.bind(dynamo.repository);
+    let calls = 0;
+    // Entre la lectura de la anterior y la baja, otro escritor reemplaza la fecha.
+    dynamo.repository.getByDate = async (date) => {
+      const current = await getByDate(date);
+      if (++calls === 1) {
+        await removeTrack(dynamo.client, dynamo.table, date, { now });
+        await dynamo.repository.create(preparedTrack('2027-03-01', 3));
+      }
+      return current;
+    };
+    const result = await run(dynamo, input(preparedTrack('2027-03-01', 2)), true);
+    expect(result).toMatchObject({ status: 'error', now: 'other' });
+    expect((await getByDate('2027-03-01'))?.title).toBe('Title 3');
+  });
+
   it('una nota inválida no toca la tabla', async () => {
     const dynamo = fakeDynamo();
     await dynamo.repository.create(preparedTrack('2027-03-01', 1));

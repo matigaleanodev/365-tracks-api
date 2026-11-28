@@ -11,6 +11,7 @@ import {
   foundationCloudformationPolicy,
   foundationPipelinePolicy,
   githubTrust,
+  MANAGED_POLICY_MAX_CHARS,
   ROLE_NAMES,
   rolePolicies,
   roleArn,
@@ -40,8 +41,24 @@ describe('modelo de entrega', () => {
   });
 
   it('el ceiling es exactamente la unión de las políticas de los roles', () => {
-    const union = Object.values(rolePolicies()).flat();
-    expect(statements(ceilingPolicy())).toEqual(union);
+    const grants = (list: Statement[]) =>
+      new Set(
+        list.flatMap(({ Action, Resource, Condition }) =>
+          Action.flatMap((action) =>
+            Resource.map((resource) => JSON.stringify([action, resource, Condition ?? null])),
+          ),
+        ),
+      );
+    const union = Object.values(rolePolicies()).flat() as Statement[];
+    expect(grants(statements(ceilingPolicy()))).toEqual(grants(union));
+  });
+
+  it('los documentos administrativos respetan las cuotas de tamaño de IAM', () => {
+    const size = (document: unknown) => JSON.stringify(document).length;
+    // Política administrada (ceiling) y política inline de un rol, medidas sin espacios.
+    expect(size(ceilingPolicy())).toBeLessThanOrEqual(MANAGED_POLICY_MAX_CHARS);
+    expect(size(foundationCloudformationPolicy())).toBeLessThanOrEqual(10240);
+    expect(size(foundationPipelinePolicy())).toBeLessThanOrEqual(10240);
   });
 
   it('los roles de pipeline solo los asumen entornos de GitHub distintos', () => {

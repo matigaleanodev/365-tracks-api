@@ -76,7 +76,7 @@ if ask '¿Quitar los revisores del entorno production (el merge del release auto
     { echo 'main no exige pull request: no se quitan los revisores.' >&2; exit 1; }
   wait_timer=$(gh api "repos/$REPO/environments/production" \
     --jq '[.protection_rules[]? | select(.type == "wait_timer") | .wait_timer][0] // 0')
-  bypass=$(gh api "repos/$REPO/environments/production" --jq '.can_admins_bypass // true')
+  bypass=$(gh api "repos/$REPO/environments/production" --jq 'if .can_admins_bypass == null then true else .can_admins_bypass end')
   restrict_to_main plan "{\"deployment_branch_policy\": $ONLY_MAIN}"
   restrict_to_main production \
     "{\"reviewers\": [], \"wait_timer\": $wait_timer, \"can_admins_bypass\": $bypass, \"deployment_branch_policy\": $ONLY_MAIN}"

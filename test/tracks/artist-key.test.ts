@@ -87,7 +87,11 @@ describe('claves largas de punta a punta', () => {
       await dynamo.repository.create(preparedTrack('2027-01-10', 3, { artist: a.artist })),
     ).toBe('artist-cooldown');
 
-    expect(await removeTrack(dynamo.client, dynamo.table, '2027-01-01')).toBe('removed');
+    expect(
+      await removeTrack(dynamo.client, dynamo.table, '2027-01-01', {
+        now: new Date('2026-12-01T00:00:00Z'),
+      }),
+    ).toBe('removed');
     const hashed = [...dynamo.items.keys()].filter((key) => key.startsWith('ARTIST|namehash#'));
     expect(hashed).toHaveLength(2);
     expect(

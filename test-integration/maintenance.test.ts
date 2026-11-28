@@ -13,6 +13,8 @@ import {
   DynamoTrackRepository,
   TRACKS_PARTITION,
 } from '../src/tracks/dynamo-repository.ts';
+import { replaceTrack } from '../src/tracks/replace-track.ts';
+import type { DailyTrack } from '../src/tracks/types.ts';
 import { editTrackDescription } from '../src/tracks/edit-description.ts';
 import {
   applyControlRepair,
@@ -34,6 +36,8 @@ import {
 } from './support/fixtures.ts';
 
 const newTable = useTables();
+/** Reloj previo al lanzamiento: la baja rechaza fechas que ya empezaron en alguna zona. */
+const BEFORE_LAUNCH = new Date('2026-12-01T00:00:00Z');
 const extraClients: DynamoDBDocumentClient[] = [];
 afterAll(() => extraClients.forEach((client) => client.destroy()));
 const otherClient = () => {
@@ -81,7 +85,7 @@ describe('auditoría con lecturas fuertes', () => {
       date: addDays(BASE_DATE, 100),
       newDescription: NEW_DESCRIPTION,
     });
-    await removeTrack(client, tableName, addDays(BASE_DATE, 300));
+    await removeTrack(client, tableName, addDays(BASE_DATE, 300), { now: BEFORE_LAUNCH });
     const gets = reads.sent.filter((command) => command instanceof GetCommand);
     expect(gets.length).toBeGreaterThan(5);
     expect(gets.every((get) => get.input.ConsistentRead === true)).toBe(true);
@@ -482,7 +486,9 @@ describe('removeTrack real', () => {
     expect(await repo.create(first)).toBe('created');
     expect(await repo.create(second)).toBe('created');
 
-    expect(await removeTrack(client, tableName, first.date)).toBe('removed');
+    expect(await removeTrack(client, tableName, first.date, { now: BEFORE_LAUNCH })).toBe(
+      'removed',
+    );
     expect(await repo.getByDate(first.date)).toBeNull();
     expect(await repo.getByDate(second.date)).toEqual(second);
     const items = await snapshotTable(client, tableName);
@@ -493,12 +499,18 @@ describe('removeTrack real', () => {
       true,
     );
     expect(artists.every((a) => a.version === 3)).toBe(true);
-    expect(await removeTrack(client, tableName, first.date)).toBe('not-found');
+    expect(await removeTrack(client, tableName, first.date, { now: BEFORE_LAUNCH })).toBe(
+      'not-found',
+    );
 
     // La canción y la fecha quedan realmente libres.
     expect(await repo.create(first)).toBe('created');
-    expect(await removeTrack(client, tableName, first.date)).toBe('removed');
-    expect(await removeTrack(client, tableName, second.date)).toBe('removed');
+    expect(await removeTrack(client, tableName, first.date, { now: BEFORE_LAUNCH })).toBe(
+      'removed',
+    );
+    expect(await removeTrack(client, tableName, second.date, { now: BEFORE_LAUNCH })).toBe(
+      'removed',
+    );
     const audit = await auditControlRecords(client, tableName);
     expect(audit.tracks).toBe(0);
     expect(audit.conflicts).toEqual([]);
@@ -520,12 +532,42 @@ describe('removeTrack real', () => {
         expect(await rival.create(track(addDays(BASE_DATE, 100), 2, artist))).toBe('created');
       }
     });
-    await expect(removeTrack(remover, tableName, target.date)).rejects.toThrow(
-      /changed while it was being removed/,
-    );
+    await expect(
+      removeTrack(remover, tableName, target.date, { now: BEFORE_LAUNCH }),
+    ).rejects.toThrow(/changed while it was being removed/);
     expect(await new DynamoTrackRepository(client, tableName).getByDate(target.date)).toEqual(
       target,
     );
     expect(partition(await snapshotTable(client, tableName), CLAIMS_PARTITION)).toHaveLength(4);
+  });
+});
+
+describe('replaceTrack (operador)', () => {
+  const input = (value: DailyTrack) =>
+    Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'createdAt'));
+
+  it('reemplaza una fecha futura, libera la canción anterior y respeta las fechas públicas', async () => {
+    const { client, tableName } = await newTable();
+    const repo = new DynamoTrackRepository(client, tableName);
+    const date = addDays(BASE_DATE, 59);
+    const old = track(date, 1);
+    expect(await repo.create(old)).toBe('created');
+    const replace = (raw: unknown, now: Date) =>
+      replaceTrack({ client, tableName, repository: repo, date, raw, now, write: true });
+
+    // 10:00 UTC del día anterior: la fecha ya empezó en UTC+14 y no se toca.
+    const started = new Date(`${addDays(date, -1)}T10:00:00Z`);
+    expect(await replace(input(track(date, 2)), started)).toEqual({ status: 'published' });
+    expect(await repo.getByDate(date)).toEqual(old);
+
+    const result = await replace(input(track(date, 2)), BEFORE_LAUNCH);
+    expect(result).toMatchObject({ status: 'replaced' });
+    expect((await repo.getByDate(date))?.spotifyTrackId).toBe(track(date, 2).spotifyTrackId);
+    expect(await repo.create(track(addDays(BASE_DATE, 200), 1))).toBe('created');
+
+    // Una repetición se rechaza y la canción vigente vuelve a su fecha.
+    const conflict = await replace(input(track(date, 1)), BEFORE_LAUNCH);
+    expect(conflict).toMatchObject({ status: 'conflict', now: 'previous' });
+    expect((await repo.getByDate(date))?.spotifyTrackId).toBe(track(date, 2).spotifyTrackId);
   });
 });

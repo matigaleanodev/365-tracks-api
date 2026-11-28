@@ -15,6 +15,7 @@ import {
   recordingClaimKey,
   TRACKS_PARTITION,
 } from './dynamo-repository.ts';
+import { isPublicSomewhere } from './publication.ts';
 import type { DailyTrack } from './types.ts';
 
 /**
@@ -507,19 +508,25 @@ async function put(
   );
 }
 
-export type RemoveResult = 'removed' | 'not-found';
+/** `published`: la fecha ya empezó en alguna zona; no se borra nada. */
+export type RemoveResult = 'removed' | 'not-found' | 'published';
 
 /**
  * Baja de una fecha: borra la canción, sus reservas (solo si siguen a nombre de esa fecha) y quita
  * la fecha de los registros de artista, todo en una transacción. Así la fecha y la canción quedan
  * realmente libres. Es la única forma soportada de limpiar datos de prueba o corregir una fecha.
  * Requiere `dynamodb:DeleteItem` en el perfil del operador (no en los roles de las Lambdas).
+ *
+ * Solo para fechas que todavía no empezaron en ninguna zona (UTC+14): una canción que alguien ya
+ * pudo ver no se borra ni se reemplaza por esta vía.
  */
 export async function removeTrack(
   client: DynamoDBDocumentClient,
   tableName: string,
   date: IsoDate,
+  { now = new Date() }: { now?: Date } = {},
 ): Promise<RemoveResult> {
+  if (isPublicSomewhere(date, now)) return 'published';
   const read = async (pk: string, key: string) =>
     (
       await client.send(

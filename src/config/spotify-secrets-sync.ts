@@ -151,6 +151,12 @@ export function createRotationPersister(store: ParameterStore, name: string, ini
     const read = async () => (await store.getMany([name])).get(name)?.trim();
     const current = await read();
     if (current !== undefined && current !== known && current !== unconfirmed) return false;
+    // El parámetro conserva el valor propio sin confirmar: queda confirmado antes de otro intento,
+    // así un fallo posterior no lo pierde.
+    if (current !== undefined && current === unconfirmed) {
+      known = current;
+      unconfirmed = undefined;
+    }
     try {
       await store.put(name, rotated);
     } catch (error) {

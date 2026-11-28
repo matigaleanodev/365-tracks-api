@@ -4,105 +4,60 @@
     {
       "Effect": "Allow",
       "Action": [
+        "logs:CreateLogGroup",
         "logs:CreateLogStream",
-        "logs:PutLogEvents"
+        "logs:DeleteLogGroup",
+        "logs:DeleteRetentionPolicy",
+        "logs:GetDataProtectionPolicy",
+        "logs:ListTagsForResource",
+        "logs:PutLogEvents",
+        "logs:PutRetentionPolicy",
+        "logs:TagResource",
+        "logs:UntagResource"
       ],
       "Resource": [
-        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-http:*"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "dynamodb:GetItem",
-        "dynamodb:Query"
-      ],
-      "Resource": [
-        "arn:aws:dynamodb:us-east-1:650387442642:table/tracks365-tracks"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "logs:CreateLogStream",
-        "logs:PutLogEvents"
-      ],
-      "Resource": [
-        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-generate:*"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "dynamodb:GetItem",
-        "dynamodb:PutItem",
-        "dynamodb:Query"
-      ],
-      "Resource": [
-        "arn:aws:dynamodb:us-east-1:650387442642:table/tracks365-tracks"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "ssm:GetParameters"
-      ],
-      "Resource": [
-        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/client-id",
-        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/client-secret",
-        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/openai/api-key",
-        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/openai/model",
-        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/selection/criteria-weights"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "logs:CreateLogStream",
-        "logs:PutLogEvents"
-      ],
-      "Resource": [
+        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-http:*",
+        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-generate:*",
         "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-playlist:*"
       ]
     },
     {
       "Effect": "Allow",
       "Action": [
+        "logs:CreateLogGroup",
+        "logs:DeleteLogGroup",
+        "logs:DeleteRetentionPolicy",
+        "logs:GetDataProtectionPolicy",
+        "logs:ListTagsForResource",
+        "logs:PutRetentionPolicy",
+        "logs:TagResource",
+        "logs:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-http",
+        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-generate",
+        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-playlist"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:CreateTable",
+        "dynamodb:DeleteTable",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeTimeToLive",
         "dynamodb:GetItem",
+        "dynamodb:ListTagsOfResource",
         "dynamodb:PutItem",
-        "dynamodb:Query"
+        "dynamodb:Query",
+        "dynamodb:TagResource",
+        "dynamodb:UntagResource",
+        "dynamodb:UpdateContinuousBackups",
+        "dynamodb:UpdateTable"
       ],
       "Resource": [
         "arn:aws:dynamodb:us-east-1:650387442642:table/tracks365-tracks"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "ssm:GetParameters"
-      ],
-      "Resource": [
-        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/client-id",
-        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/client-secret",
-        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/refresh-token"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "ssm:PutParameter"
-      ],
-      "Resource": [
-        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/refresh-token"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "ssm:GetParameterHistory"
-      ],
-      "Resource": [
-        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/refresh-token"
       ]
     },
     {
@@ -114,8 +69,29 @@
       "Resource": [
         "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/client-id",
         "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/client-secret",
-        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/refresh-token",
         "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/refresh-token-seed-sha256"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameters"
+      ],
+      "Resource": [
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/openai/api-key",
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/openai/model",
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/selection/criteria-weights"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameterHistory",
+        "ssm:GetParameters",
+        "ssm:PutParameter"
+      ],
+      "Resource": [
+        "arn:aws:ssm:us-east-1:650387442642:parameter/tracks365/spotify/refresh-token"
       ]
     },
     {
@@ -131,13 +107,39 @@
     {
       "Effect": "Allow",
       "Action": [
-        "cloudformation:DescribeStacks",
+        "lambda:AddPermission",
+        "lambda:CreateFunction",
+        "lambda:DeleteFunction",
+        "lambda:GetFunction",
+        "lambda:GetFunctionCodeSigningConfig",
+        "lambda:GetFunctionConfiguration",
+        "lambda:GetFunctionRecursionConfig",
+        "lambda:GetPolicy",
+        "lambda:GetRuntimeManagementConfig",
+        "lambda:ListTags",
+        "lambda:RemovePermission",
+        "lambda:TagResource",
+        "lambda:UntagResource",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration"
+      ],
+      "Resource": [
+        "arn:aws:lambda:us-east-1:650387442642:function:tracks365-api-generate",
+        "arn:aws:lambda:us-east-1:650387442642:function:tracks365-api-http",
+        "arn:aws:lambda:us-east-1:650387442642:function:tracks365-api-playlist"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:DeleteChangeSet",
+        "cloudformation:DescribeChangeSet",
         "cloudformation:DescribeStackEvents",
         "cloudformation:DescribeStackResources",
-        "cloudformation:ListStackResources",
-        "cloudformation:DescribeChangeSet",
+        "cloudformation:DescribeStacks",
         "cloudformation:GetTemplate",
-        "cloudformation:GetTemplateSummary"
+        "cloudformation:GetTemplateSummary",
+        "cloudformation:ListStackResources"
       ],
       "Resource": [
         "arn:aws:cloudformation:us-east-1:650387442642:stack/tracks365-api/*"
@@ -156,9 +158,9 @@
     {
       "Effect": "Allow",
       "Action": [
-        "s3:ListBucket",
         "s3:GetBucketLocation",
-        "s3:GetEncryptionConfiguration"
+        "s3:GetEncryptionConfiguration",
+        "s3:ListBucket"
       ],
       "Resource": [
         "arn:aws:s3:::tracks365-assets-650387442642-us-east-1"
@@ -184,15 +186,6 @@
     {
       "Effect": "Allow",
       "Action": [
-        "cloudformation:DeleteChangeSet"
-      ],
-      "Resource": [
-        "arn:aws:cloudformation:us-east-1:650387442642:stack/tracks365-api/*"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
         "iam:PassRole"
       ],
       "Resource": [
@@ -203,21 +196,6 @@
           "iam:PassedToService": "cloudformation.amazonaws.com"
         }
       }
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "cloudformation:DescribeStacks",
-        "cloudformation:DescribeStackEvents",
-        "cloudformation:DescribeStackResources",
-        "cloudformation:ListStackResources",
-        "cloudformation:DescribeChangeSet",
-        "cloudformation:GetTemplate",
-        "cloudformation:GetTemplateSummary"
-      ],
-      "Resource": [
-        "arn:aws:cloudformation:us-east-1:650387442642:stack/tracks365-api/*"
-      ]
     },
     {
       "Effect": "Allow",
@@ -235,58 +213,6 @@
           ]
         }
       }
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject"
-      ],
-      "Resource": [
-        "arn:aws:s3:::tracks365-assets-650387442642-us-east-1/tracks365-api/*"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "dynamodb:CreateTable",
-        "dynamodb:DescribeTable",
-        "dynamodb:UpdateTable",
-        "dynamodb:DeleteTable",
-        "dynamodb:DescribeContinuousBackups",
-        "dynamodb:UpdateContinuousBackups",
-        "dynamodb:DescribeTimeToLive",
-        "dynamodb:TagResource",
-        "dynamodb:UntagResource",
-        "dynamodb:ListTagsOfResource"
-      ],
-      "Resource": [
-        "arn:aws:dynamodb:us-east-1:650387442642:table/tracks365-tracks"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "lambda:CreateFunction",
-        "lambda:GetFunction",
-        "lambda:GetFunctionConfiguration",
-        "lambda:GetFunctionCodeSigningConfig",
-        "lambda:GetFunctionRecursionConfig",
-        "lambda:GetRuntimeManagementConfig",
-        "lambda:UpdateFunctionCode",
-        "lambda:UpdateFunctionConfiguration",
-        "lambda:DeleteFunction",
-        "lambda:AddPermission",
-        "lambda:RemovePermission",
-        "lambda:GetPolicy",
-        "lambda:TagResource",
-        "lambda:UntagResource",
-        "lambda:ListTags"
-      ],
-      "Resource": [
-        "arn:aws:lambda:us-east-1:650387442642:function:tracks365-api-http",
-        "arn:aws:lambda:us-east-1:650387442642:function:tracks365-api-generate",
-        "arn:aws:lambda:us-east-1:650387442642:function:tracks365-api-playlist"
-      ]
     },
     {
       "Effect": "Allow",
@@ -322,34 +248,13 @@
       "Effect": "Allow",
       "Action": [
         "scheduler:CreateSchedule",
+        "scheduler:DeleteSchedule",
         "scheduler:GetSchedule",
-        "scheduler:UpdateSchedule",
-        "scheduler:DeleteSchedule"
+        "scheduler:UpdateSchedule"
       ],
       "Resource": [
         "arn:aws:scheduler:us-east-1:650387442642:schedule/default/tracks365-daily-track",
         "arn:aws:scheduler:us-east-1:650387442642:schedule/default/tracks365-playlist-sync"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "logs:CreateLogGroup",
-        "logs:DeleteLogGroup",
-        "logs:PutRetentionPolicy",
-        "logs:DeleteRetentionPolicy",
-        "logs:TagResource",
-        "logs:UntagResource",
-        "logs:ListTagsForResource",
-        "logs:GetDataProtectionPolicy"
-      ],
-      "Resource": [
-        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-http",
-        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-http:*",
-        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-generate",
-        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-generate:*",
-        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-playlist",
-        "arn:aws:logs:us-east-1:650387442642:log-group:/aws/lambda/tracks365-api-playlist:*"
       ]
     },
     {
@@ -383,11 +288,11 @@
     {
       "Effect": "Allow",
       "Action": [
-        "apigateway:GET",
-        "apigateway:POST",
-        "apigateway:PATCH",
-        "apigateway:PUT",
         "apigateway:DELETE",
+        "apigateway:GET",
+        "apigateway:PATCH",
+        "apigateway:POST",
+        "apigateway:PUT",
         "apigateway:TagResource"
       ],
       "Resource": [

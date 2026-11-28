@@ -60,7 +60,7 @@ aws --profile PERFIL_ADMIN --region us-east-1 iam put-role-policy --role-name tr
   --policy-document file://deploy/admin/tracks365-foundation-cloudformation.policy.json
 ```
 
-A managed policy keeps at most five versions: delete the oldest non-default one first if needed (`iam list-policy-versions`, `iam delete-policy-version`).
+A managed policy keeps at most five versions: delete the oldest non-default one first if needed (`iam list-policy-versions`, `iam delete-policy-version`). It cannot exceed 6,144 characters without whitespace: `npm run admin:policies` compacts the ceiling without changing its permissions and a test checks the size.
 
 In every command, replace `PERFIL_ADMIN` with a local AWS CLI profile that has the necessary administrative permissions. Before each mutation, verify the identity and check the target account and region:
 
@@ -105,7 +105,7 @@ Deployment configuration is versioned in [`deploy/production.json`](deploy/produ
 
 ```json
 {
-  "corsAllowedOrigins": ["http://localhost:4200"],
+  "corsAllowedOrigins": ["https://daywave.matiasgaleano.dev"],
   "scheduleEnabled": false,
   "playlistScheduleEnabled": false
 }
@@ -187,9 +187,22 @@ Private CLIs with an authorized `AWS_PROFILE`; none is exposed over HTTP and no 
 - Origins as `scheme://host[:port]`, no path or trailing slash; duplicates are ignored.
 - `*` is rejected. `https` is required, except `http` for `localhost` / `127.0.0.1`.
 - Empty list = no CORS configuration.
-- The file holds the **complete** list: to add the final frontend domain, add `https://<domain>` (and drop localhost once it is no longer needed). The run summary shows the list in effect; the change set shows the API change.
+- The file holds the **complete** list of production origins: only the public frontend domain. Local frontend development uses fixtures or a local API, not production.
 
 Test with `curl -i -H "Origin: https://<origin>" <api-url>/api/tracks` and look for `access-control-allow-origin`.
+
+## Rollback
+
+Data is never part of a rollback: the table has `DeletionPolicy: Retain` and point-in-time recovery, and no step in this section touches it.
+
+- **A deployment fails.** If the change set fails, CloudFormation returns to the previous template and the `execute` job fails. Before retrying, read the real stack state (`aws --profile AUTHORIZED_PROFILE --region us-east-1 cloudformation describe-stacks --stack-name tracks365-api`): `UPDATE_ROLLBACK_COMPLETE` accepts a new deployment; any other state needs manual review. A workflow that fails after `execute` does not mean production was left unchanged.
+- **A released version misbehaves.** The fix is a new `release/x.x.x` to `main` with the fix or a revert; the merge deploys it with the same checks. To stop the editorial jobs, that release keeps `scheduleEnabled` and `playlistScheduleEnabled` at `false`. A revert keeps the published frontend origin in `corsAllowedOrigins` while the frontend uses it, and the configuration test requires it.
+- **Required order to revert permissions.** Roles are added, never replaced: an older API version works with a newer foundation, but not the other way around. Revert in this order, each step after the previous one succeeded:
+  1. The API, to a version that no longer uses the new roles or permissions (a release; until then CloudFormation needs those permissions to delete the resources that are no longer declared).
+  2. The foundation, with a change set of the saved previous template and the same commands as "Role changes before a release". Here the change set may include `Remove` only for roles that the reverted release added and the API no longer uses; no replacements or bucket changes.
+  3. The `project` policy of `tracks365-foundation-cloudformation`, with `iam put-role-policy` and the copy saved before the change (the previous one cannot delete the new roles).
+  4. The ceiling: `iam list-policy-versions` and `iam set-default-policy-version --version-id vN` on `tracks365-ceiling` (older versions are kept).
+- **Stuck rollback.** If a `tracks365-api` rollback ends in `UPDATE_ROLLBACK_FAILED`, an administrator unblocks it with `cloudformation continue-update-rollback --stack-name tracks365-api` (and `--resources-to-skip` only for resources checked by hand); `tracks365-execute` lacks that permission.
 
 ## Catalog health signals
 

@@ -40,6 +40,8 @@ export const SSM_PARAMETERS = {
   spotifyClientId: `${SSM_PREFIX}/spotify/client-id`,
   spotifyClientSecret: `${SSM_PREFIX}/spotify/client-secret`,
   spotifyRefreshToken: `${SSM_PREFIX}/spotify/refresh-token`,
+  /** SHA-256 del último refresh token sembrado desde GitHub (SecureString como el resto; no permite reconstruir el token). */
+  spotifyRefreshTokenSeed: `${SSM_PREFIX}/spotify/refresh-token-seed-sha256`,
   openaiApiKey: `${SSM_PREFIX}/openai/api-key`,
   openaiModel: `${SSM_PREFIX}/openai/model`,
   criteriaWeights: `${SSM_PREFIX}/selection/criteria-weights`,
@@ -56,6 +58,7 @@ export const ROLE_NAMES = [
   'cloudformation',
   'prepare',
   'execute',
+  'secrets',
 ] as const;
 export type RoleName = (typeof ROLE_NAMES)[number];
 
@@ -67,8 +70,17 @@ export const CEILING_NAME = `${PREFIX}ceiling`;
 export const CEILING = `arn:aws:iam::${ACCOUNT}:policy/${CEILING_NAME}`;
 export const OIDC_PROVIDER = `arn:aws:iam::${ACCOUNT}:oidc-provider/token.actions.githubusercontent.com`;
 
-/** Entornos de GitHub: `plan` sin aprobación, `production` y `foundation` con revisores. */
-export const ENVIRONMENTS = { plan: 'plan', production: 'production', foundation: 'foundation' };
+/**
+ * Entornos de GitHub; los workflows solo corren desde `main`. `plan` y `production` no llevan
+ * revisores: la autorización del despliegue es el merge del release en `main`. `secrets` tampoco:
+ * su único workflow es manual. `foundation` conserva revisores porque cambia roles IAM.
+ */
+export const ENVIRONMENTS = {
+  plan: 'plan',
+  production: 'production',
+  foundation: 'foundation',
+  secrets: 'secrets',
+};
 
 type Json = Record<string, unknown>;
 
@@ -159,6 +171,21 @@ export function rolePolicies(): Record<RoleName, Json[]> {
         ].map(parameterArn),
       ),
       allow(['ssm:PutParameter'], [parameterArn(SSM_PARAMETERS.spotifyRefreshToken)]),
+    ],
+    // Sincronización de credenciales de Spotify desde GitHub Secrets: solo estos parámetros. Lee para
+    // no reescribir valores iguales y para respetar un refresh token que Spotify ya rotó.
+    secrets: [
+      // Historial solo del refresh token: detecta un valor de la fuente que ya fue reemplazado.
+      allow(['ssm:GetParameterHistory'], [parameterArn(SSM_PARAMETERS.spotifyRefreshToken)]),
+      allow(
+        ['ssm:GetParameters', 'ssm:PutParameter'],
+        [
+          SSM_PARAMETERS.spotifyClientId,
+          SSM_PARAMETERS.spotifyClientSecret,
+          SSM_PARAMETERS.spotifyRefreshToken,
+          SSM_PARAMETERS.spotifyRefreshTokenSeed,
+        ].map(parameterArn),
+      ),
     ],
     scheduler: [
       allow(
@@ -298,12 +325,69 @@ export const roleTrust = (name: RoleName): Json => {
       return githubTrust(ENVIRONMENTS.plan);
     case 'execute':
       return githubTrust(ENVIRONMENTS.production);
+    case 'secrets':
+      return githubTrust(ENVIRONMENTS.secrets);
   }
 };
 
-/** Techo de permisos de todos los roles de la fundación: la unión de sus políticas. */
+/** Cuota de IAM para una política administrada, medida sin espacios. */
+export const MANAGED_POLICY_MAX_CHARS = 6144;
+
+type Grant = { Action: string[]; Resource: string[]; Condition?: Json };
+
+const canonical = (value: unknown): string =>
+  JSON.stringify(value, (_key, inner: unknown) =>
+    inner && typeof inner === 'object' && !Array.isArray(inner)
+      ? Object.fromEntries(Object.entries(inner).sort(([a], [b]) => a.localeCompare(b)))
+      : inner,
+  );
+
+/** Agrupa `items` por el conjunto ordenado de valores asociados a cada uno. */
+const groupBySet = (pairs: [string, string][]): [string[], string[]][] => {
+  const byItem = new Map<string, Set<string>>();
+  for (const [item, value] of pairs) {
+    byItem.set(item, (byItem.get(item) ?? new Set()).add(value));
+  }
+  const bySet = new Map<string, [string[], string[]]>();
+  for (const [item, values] of byItem) {
+    const sorted = [...values].sort();
+    const key = sorted.join('\n');
+    const entry = bySet.get(key) ?? [sorted, []];
+    entry[1].push(item);
+    bySet.set(key, entry);
+  }
+  return [...bySet.values()];
+};
+
+/**
+ * Reescribe sentencias Allow con exactamente los mismos pares acción/recurso/condición, sin
+ * comodines nuevos: por condición y servicio elige la agrupación más corta (por recurso o por acción).
+ */
+export function compactStatements(statements: Json[]): Json[] {
+  const partitions = new Map<string, { condition?: Json; pairs: [string, string][] }>();
+  for (const statement of statements as Grant[]) {
+    for (const action of statement.Action) {
+      const key = `${canonical(statement.Condition ?? null)} ${action.split(':')[0]}`;
+      const partition = partitions.get(key) ?? { condition: statement.Condition, pairs: [] };
+      for (const resource of statement.Resource) partition.pairs.push([action, resource]);
+      partitions.set(key, partition);
+    }
+  }
+  const size = (list: Json[]) => JSON.stringify(list).length;
+  return [...partitions.values()].flatMap(({ condition, pairs }) => {
+    const byResource = groupBySet(pairs.map(([a, r]) => [r, a])).map(([actions, resources]) =>
+      allow(actions, resources, condition),
+    );
+    const byAction = groupBySet(pairs).map(([resources, actions]) =>
+      allow([...actions].sort(), resources, condition),
+    );
+    return size(byResource) <= size(byAction) ? byResource : byAction;
+  });
+}
+
+/** Techo de permisos de todos los roles de la fundación: la unión de sus políticas, compactada. */
 export function ceilingPolicy(): Json {
-  return policy(Object.values(rolePolicies()).flat());
+  return policy(compactStatements(Object.values(rolePolicies()).flat()));
 }
 
 /** Rol que asume el workflow de fundación (entorno `foundation`): solo gestiona su change set. */

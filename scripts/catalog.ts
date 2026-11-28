@@ -1,4 +1,6 @@
-// Estado y reposición manual del catálogo de 30 días. Uso:
+// Consulta, estado y reposición manual del catálogo. Uso:
+//   AWS_PROFILE=<perfil> node scripts/catalog.ts list      (todo el catálogo, solo lee)
+//   AWS_PROFILE=<perfil> node scripts/catalog.ts list --json   (con la nota completa)
 //   node scripts/catalog.ts status --local                 (repositorio en memoria vacío)
 //   AWS_PROFILE=<perfil> node scripts/catalog.ts status    (solo lee la tabla desplegada)
 //   node scripts/catalog.ts replenish --local              (ejercita la orquestación)
@@ -15,6 +17,7 @@ import { createCatalogDependencies } from '../src/jobs/dependencies.ts';
 import { notImplementedMusicSelector } from '../src/music-selection/index.ts';
 import { notImplementedSpotifyClient } from '../src/spotify/index.ts';
 import { getCatalogStatus, getCatalogWindow, replenishCatalog } from '../src/tracks/catalog.ts';
+import { listCatalog } from '../src/tracks/catalog-list.ts';
 import { DynamoTrackRepository } from '../src/tracks/dynamo-repository.ts';
 import { InMemoryTrackRepository } from '../src/tracks/in-memory-repository.ts';
 
@@ -22,6 +25,7 @@ const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     local: { type: 'boolean', default: false },
+    json: { type: 'boolean', default: false },
     write: { type: 'boolean', default: false },
     live: { type: 'boolean', default: false },
     'max-new': { type: 'string' },
@@ -35,8 +39,10 @@ function fail(message: string): never {
 }
 
 const [command] = positionals;
-if (command !== 'status' && command !== 'replenish') {
-  fail('Usage: node scripts/catalog.ts <status|replenish> [--local] [--write] [--now=ISO]');
+if (command !== 'list' && command !== 'status' && command !== 'replenish') {
+  fail(
+    'Usage: node scripts/catalog.ts <list [--json]|status|replenish> [--local] [--write] [--now=ISO]',
+  );
 }
 const clock = values.now ? new Date(values.now) : undefined;
 if (clock && Number.isNaN(clock.getTime())) {
@@ -70,14 +76,36 @@ const repository = values.local
       DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION })),
       TABLE_NAME,
     );
-console.log(
+// Con --json la salida estándar queda solo para el JSON.
+(values.json ? console.error : console.log)(
   values.local
     ? 'target: local (in memory)'
     : `target: ${TABLE_NAME} (${REGION}, profile ${profile})`,
 );
 
 const window = getCatalogWindow(now());
-if (command === 'status') {
+if (command === 'list') {
+  const { entries, gaps } = await listCatalog(repository, now());
+  if (values.json) {
+    console.log(JSON.stringify({ entries, gaps }, null, 2));
+  } else {
+    const clip = (value: string, max: number) =>
+      value.length > max ? `${value.slice(0, max - 1)}…` : value;
+    for (const entry of entries) {
+      const note = entry.description === undefined ? '(sin nota)' : clip(entry.description, 60);
+      const missing =
+        entry.missingFields.length > 0 ? ` [falta: ${entry.missingFields.join(', ')}]` : '';
+      console.log(
+        `${entry.date}  ${entry.status.padEnd(10)}  ${clip(`${entry.title} — ${entry.artist}`, 50).padEnd(50)}  ${entry.spotifyTrackId}  ${note}${missing}`,
+      );
+    }
+    const count = (status: string) => entries.filter((entry) => entry.status === status).length;
+    console.log(
+      `total ${entries.length} · published ${count('published')} · prepared ${count('prepared')} · incomplete ${count('incomplete')}`,
+    );
+    console.log(`gaps (sin canción): ${gaps.join(', ') || '(none)'}`);
+  }
+} else if (command === 'status') {
   const status = await getCatalogStatus(repository, window);
   console.log(`window ${status.from} → ${status.to}`);
   console.log(`prepared ${status.prepared.length}/${window.length}`);

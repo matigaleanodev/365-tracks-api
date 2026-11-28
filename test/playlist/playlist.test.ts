@@ -43,7 +43,7 @@ describe('corte de elegibilidad (D+1 12:00 UTC)', () => {
   it('la playlist corresponde al año de la fecha editorial', () => {
     expect(playlistYear('2027-12-31')).toBe(2027);
     expect(playlistYear('2028-01-01')).toBe(2028);
-    expect(playlistName(2028)).toBe('365 Tracks 2028');
+    expect(playlistName(2028)).toBe('Daywave 2028');
   });
 });
 
@@ -113,20 +113,20 @@ describe('syncPlaylists', () => {
     expect(report.years).toEqual([
       {
         year: 2027,
-        playlistId: 'id-365 Tracks 2027',
+        playlistId: 'id-Daywave 2027',
         wouldCreatePlaylist: false,
         added: ['2027-01-01', '2027-01-02', '2027-01-03'],
         adopted: [],
         external: 0,
       },
     ]);
-    expect(lists.get('id-365 Tracks 2027')).toEqual([spotifyId(1), spotifyId(2), spotifyId(3)]);
+    expect(lists.get('id-Daywave 2027')).toEqual([spotifyId(1), spotifyId(2), spotifyId(3)]);
   });
 
   it('nunca agrega la canción de hoy ni una futura', async () => {
     const { deps, lists } = setup(tracks, '2027-01-04T11:59:59Z'); // última elegible: 2027-01-02
     await syncPlaylists(deps);
-    const added = lists.get('id-365 Tracks 2027') ?? [];
+    const added = lists.get('id-Daywave 2027') ?? [];
     expect(added).not.toContain(spotifyId(3));
     expect(added).not.toContain(spotifyId(4));
     expect(added).toEqual([spotifyId(1), spotifyId(2)]);
@@ -153,12 +153,12 @@ describe('syncPlaylists', () => {
     const report = await syncPlaylists(later);
 
     expect(report.years[0]?.added).toEqual(['2027-01-04']);
-    expect(ctx.lists.get('id-365 Tracks 2027')).toHaveLength(4);
+    expect(ctx.lists.get('id-Daywave 2027')).toHaveLength(4);
   });
 
   it('recupera una caída entre escribir en Spotify y registrar: adopta sin duplicar', async () => {
     const playlists = fakePlaylists({
-      'id-365 Tracks 2027': [spotifyId(1), spotifyId(2)], // ya escritas por una ejecución caída
+      'id-Daywave 2027': [spotifyId(1), spotifyId(2)], // ya escritas por una ejecución caída
     });
     const ctx = setup(tracks, NOW, playlists);
 
@@ -168,15 +168,15 @@ describe('syncPlaylists', () => {
       adopted: ['2027-01-01', '2027-01-02'],
       added: ['2027-01-03'],
     });
-    expect(ctx.lists.get('id-365 Tracks 2027')).toEqual([spotifyId(1), spotifyId(2), spotifyId(3)]);
+    expect(ctx.lists.get('id-Daywave 2027')).toEqual([spotifyId(1), spotifyId(2), spotifyId(3)]);
     expect(ctx.spies.create).not.toHaveBeenCalled(); // reutiliza la playlist existente
   });
 
   it('no duplica la playlist si se cayó tras crearla y antes de guardar su ID', async () => {
-    const ctx = setup(tracks, NOW, fakePlaylists({ 'id-365 Tracks 2027': [] }));
+    const ctx = setup(tracks, NOW, fakePlaylists({ 'id-Daywave 2027': [] }));
     await syncPlaylists(ctx.deps);
     expect(ctx.spies.create).not.toHaveBeenCalled();
-    expect(await ctx.state.getPlaylist(2027)).toMatchObject({ playlistId: 'id-365 Tracks 2027' });
+    expect(await ctx.state.getPlaylist(2027)).toMatchObject({ playlistId: 'id-Daywave 2027' });
   });
 
   it('el dry-run no crea ni escribe nada, ni en Spotify ni en el estado', async () => {
@@ -200,8 +200,8 @@ describe('syncPlaylists', () => {
     const report = await syncPlaylists(ctx.deps);
 
     expect(report.years.map((y) => y.year)).toEqual([2027, 2028]);
-    expect(ctx.lists.get('id-365 Tracks 2027')).toEqual([spotifyId(1)]);
-    expect(ctx.lists.get('id-365 Tracks 2028')).toEqual([spotifyId(2), spotifyId(3)]);
+    expect(ctx.lists.get('id-Daywave 2027')).toEqual([spotifyId(1)]);
+    expect(ctx.lists.get('id-Daywave 2028')).toEqual([spotifyId(2), spotifyId(3)]);
   });
 
   it('el 31 de diciembre de 2027 no entra a la playlist 2028 ni 2027 antes del corte', async () => {
@@ -216,19 +216,19 @@ describe('syncPlaylists', () => {
     const report = await syncPlaylists(ctx.deps);
 
     expect(report.skippedIncomplete).toEqual(['2027-01-02']);
-    expect(ctx.lists.get('id-365 Tracks 2027')).toEqual([spotifyId(1), spotifyId(3)]);
+    expect(ctx.lists.get('id-Daywave 2027')).toEqual([spotifyId(1), spotifyId(3)]);
   });
 
   it('ignora fechas previas al lanzamiento', async () => {
     const ctx = setup([day('2026-12-31', 9), day('2027-01-01', 1)], NOW);
     await syncPlaylists(ctx.deps);
-    expect(ctx.lists.get('id-365 Tracks 2027')).toEqual([spotifyId(1)]);
+    expect(ctx.lists.get('id-Daywave 2027')).toEqual([spotifyId(1)]);
   });
 
   it('no agrega dos veces el mismo ID de Spotify en una ejecución', async () => {
     const ctx = setup([day('2027-01-01', 1), day('2027-01-02', 1)], NOW);
     await syncPlaylists(ctx.deps);
-    expect(ctx.lists.get('id-365 Tracks 2027')).toEqual([spotifyId(1)]);
+    expect(ctx.lists.get('id-Daywave 2027')).toEqual([spotifyId(1)]);
   });
 
   it('si falla la escritura en Spotify no registra nada y el reintento completa', async () => {
@@ -240,11 +240,11 @@ describe('syncPlaylists', () => {
 
     const retry = await syncPlaylists(ctx.deps);
     expect(retry.years[0]?.added).toHaveLength(3);
-    expect(ctx.lists.get('id-365 Tracks 2027')).toHaveLength(3);
+    expect(ctx.lists.get('id-Daywave 2027')).toHaveLength(3);
   });
 
   describe('reconciliación con la playlist real', () => {
-    const PL = 'id-365 Tracks 2027';
+    const PL = 'id-Daywave 2027';
     const synced = async (ctx: ReturnType<typeof setup>) => {
       await syncPlaylists(ctx.deps);
       ctx.spies.addTracks.mockClear();
@@ -324,7 +324,7 @@ describe('syncPlaylists', () => {
   });
 
   describe('lease y posiciones físicas', () => {
-    const PL = 'id-365 Tracks 2027';
+    const PL = 'id-Daywave 2027';
 
     it('no escribe si el candado está por vencer y la siguiente ejecución relee', async () => {
       const ctx = setup(tracks, NOW);
@@ -388,11 +388,7 @@ describe('syncPlaylists', () => {
       const ctx = setup(tracks, NOW);
       const [a, b] = await Promise.all([syncPlaylists(ctx.deps), syncPlaylists(ctx.deps)]);
 
-      expect(ctx.lists.get('id-365 Tracks 2027')).toEqual([
-        spotifyId(1),
-        spotifyId(2),
-        spotifyId(3),
-      ]);
+      expect(ctx.lists.get('id-Daywave 2027')).toEqual([spotifyId(1), spotifyId(2), spotifyId(3)]);
       expect(ctx.spies.create).toHaveBeenCalledTimes(1);
       expect([a.skippedLocked, b.skippedLocked].flat()).toEqual([2027]);
     });
@@ -414,7 +410,7 @@ describe('syncPlaylists', () => {
       const report = await syncPlaylists(ctx.deps);
 
       expect(report.skippedLocked).toEqual([]);
-      expect(ctx.lists.get('id-365 Tracks 2027')).toHaveLength(3);
+      expect(ctx.lists.get('id-Daywave 2027')).toHaveLength(3);
     });
 
     it('libera el candado aunque falle la escritura, y no libera uno ajeno', async () => {

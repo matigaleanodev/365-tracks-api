@@ -14,7 +14,8 @@
         "arn:aws:iam::650387442642:role/tracks365-scheduler",
         "arn:aws:iam::650387442642:role/tracks365-cloudformation",
         "arn:aws:iam::650387442642:role/tracks365-prepare",
-        "arn:aws:iam::650387442642:role/tracks365-execute"
+        "arn:aws:iam::650387442642:role/tracks365-execute",
+        "arn:aws:iam::650387442642:role/tracks365-secrets"
       ],
       "Condition": {
         "StringEquals": {
@@ -43,7 +44,8 @@
         "arn:aws:iam::650387442642:role/tracks365-scheduler",
         "arn:aws:iam::650387442642:role/tracks365-cloudformation",
         "arn:aws:iam::650387442642:role/tracks365-prepare",
-        "arn:aws:iam::650387442642:role/tracks365-execute"
+        "arn:aws:iam::650387442642:role/tracks365-execute",
+        "arn:aws:iam::650387442642:role/tracks365-secrets"
       ]
     },
     {

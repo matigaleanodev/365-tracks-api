@@ -1,25 +1,15 @@
 name: deploy
 
-# Manual y sin disparadores automáticos. Flujo: plan (entorno `plan`, sin aprobación) crea y revisa un
-# change set; execute (entorno `production`, con revisores) ejecuta ese mismo change set.
+# Automático al integrar en `main` (merge de `release/x.x.x`); la ejecución manual desde `main` queda
+# como alternativa excepcional y usa la misma configuración. Flujo: plan (entorno `plan`, sin
+# aprobación) crea y revisa un change set; execute (entorno `production`, sin revisores: el merge del
+# release ya es la autorización) ejecuta ese mismo change set; release publica el tag y la release de la versión de package.json si faltan.
+# CORS y el estado de los Schedulers salen de deploy/production.json (versionado): ningún despliegue
+# los cambia por un input olvidado.
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      cors_allowed_origins:
-        description: 'Orígenes CORS permitidos, separados por coma (lista completa en cada despliegue; sin *). Vacío = sin CORS.'
-        required: false
-        default: 'http://localhost:4200'
-        type: string
-      schedule_enabled:
-        description: 'Habilitar el Scheduler de la reposición diaria del catálogo. Desmarcado = DISABLED (cada despliegue fija el estado).'
-        required: false
-        default: false
-        type: boolean
-      playlist_schedule_enabled:
-        description: 'Habilitar el Scheduler de la sincronización de la playlist anual (12:30 UTC). Desmarcado = DISABLED (cada despliegue fija el estado).'
-        required: false
-        default: false
-        type: boolean
 
 permissions: {}
 
@@ -45,6 +35,7 @@ jobs:
     outputs:
       stack: ${{ steps.change-set.outputs.stack }}
       changeset: ${{ steps.change-set.outputs.changeset }}
+      noop: ${{ steps.change-set.outputs.noop }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -64,19 +55,17 @@ jobs:
           role-session-name: tracks365-plan-${{ github.run_id }}
       - name: Preparar el change set
         id: change-set
-        env:
-          # Lo lee infra/config.ts al sintetizar; ahí se validan y se rechaza `*`.
-          CORS_ALLOWED_ORIGINS: ${{ inputs.cors_allowed_origins }}
-          # Los inputs viajan por entorno (nunca interpolados en el script) y se entregan a CDK como
-          # contexto, que tiene prioridad sobre cualquier variable heredada.
-          SCHEDULE_ENABLED_INPUT: ${{ inputs.schedule_enabled }}
-          PLAYLIST_SCHEDULE_ENABLED_INPUT: ${{ inputs.playlist_schedule_enabled }}
         run: |
           set -euo pipefail
-          # Estado de los Schedulers: solo `true` o `false`, explícitos en cada despliegue.
-          for value in "$SCHEDULE_ENABLED_INPUT" "$PLAYLIST_SCHEDULE_ENABLED_INPUT"; do
-            [[ "$value" == true || "$value" == false ]] || { echo "Valor booleano inválido: '$value'"; exit 1; }
-          done
+          # Configuración versionada del despliegue: CORS (lo valida infra/config.ts, que rechaza `*`)
+          # y el estado de cada Scheduler, solo `true` o `false`.
+          config=deploy/production.json
+          jq -e '(.corsAllowedOrigins | type == "array" and all(type == "string")) and (.scheduleEnabled | type == "boolean") and (.playlistScheduleEnabled | type == "boolean")' "$config" > /dev/null \
+            || { echo "$config inválido"; exit 1; }
+          CORS_ALLOWED_ORIGINS=$(jq -r '.corsAllowedOrigins | join(",")' "$config")
+          SCHEDULE_ENABLED_INPUT=$(jq -r '.scheduleEnabled' "$config")
+          PLAYLIST_SCHEDULE_ENABLED_INPUT=$(jq -r '.playlistScheduleEnabled' "$config")
+          export CORS_ALLOWED_ORIGINS
           # Una variable heredada no puede cambiar el estado ni las horas: quedan en los defaults de config.ts.
           unset PUBLISH_TIME_UTC SCHEDULE_ENABLED PLAYLIST_SCHEDULE_ENABLED PLAYLIST_SYNC_TIME_UTC
           schedule_context=(-c "scheduleEnabled=$SCHEDULE_ENABLED_INPUT" -c "playlistScheduleEnabled=$PLAYLIST_SCHEDULE_ENABLED_INPUT")
@@ -89,8 +78,8 @@ jobs:
           [[ "$(jq -r 'length' <<< "$schedules")" == 2 ]] || { echo "Se esperaban 2 Schedulers: $schedules"; exit 1; }
           daily=$(jq -c 'map(select(.name == "tracks365-daily-track"))[0]' <<< "$schedules")
           playlist=$(jq -c 'map(select(.name == "tracks365-playlist-sync"))[0]' <<< "$schedules")
-          [[ "$(jq -r .state <<< "$daily")" == "$(expected "$SCHEDULE_ENABLED_INPUT")" ]] || { echo "El Scheduler diario no coincide con schedule_enabled: $daily"; exit 1; }
-          [[ "$(jq -r .state <<< "$playlist")" == "$(expected "$PLAYLIST_SCHEDULE_ENABLED_INPUT")" ]] || { echo "El Scheduler de la playlist no coincide con playlist_schedule_enabled: $playlist"; exit 1; }
+          [[ "$(jq -r .state <<< "$daily")" == "$(expected "$SCHEDULE_ENABLED_INPUT")" ]] || { echo "El Scheduler diario no coincide con scheduleEnabled: $daily"; exit 1; }
+          [[ "$(jq -r .state <<< "$playlist")" == "$(expected "$PLAYLIST_SCHEDULE_ENABLED_INPUT")" ]] || { echo "El Scheduler de la playlist no coincide con playlistScheduleEnabled: $playlist"; exit 1; }
 
           identity=$(aws sts get-caller-identity --output json)
           test "$(jq -r .Account <<< "$identity")" = "$ACCOUNT"
@@ -112,7 +101,29 @@ jobs:
             --method prepare-change-set --change-set-name "$change_set" \
             --require-approval never --no-notices
 
-          aws cloudformation describe-change-set --stack-name "$STACK" --change-set-name "$change_set" > change-set.json
+          # Un release sin cambios en el stack (solo docs o scripts) no deja nada que ejecutar: CDK no
+          # conserva el change set o CloudFormation lo marca FAILED por no tener cambios. Es un no-op en verde.
+          if ! aws cloudformation describe-change-set --stack-name "$STACK" --change-set-name "$change_set" > change-set.json 2> change-set-error.txt; then
+            grep -q "does not exist" change-set-error.txt || { cat change-set-error.txt; exit 1; }
+            echo '{"Changes":[],"Status":"NO_CHANGES"}' > change-set.json
+          fi
+          # CORS y Schedulers se informan también en un release sin cambios de infraestructura.
+          {
+            echo "CORS: \`${CORS_ALLOWED_ORIGINS:-(sin CORS)}\`"
+            echo
+            echo "#### Schedulers (estado sintetizado)"
+            echo
+            echo "| Scheduler | Estado | Hora UTC |"
+            echo "| --- | --- | --- |"
+            jq -r '.[] | (.cron | capture("^cron\\((?<m>[0-9]+) (?<h>[0-9]+) ") | "\(("0" + .h)[-2:]):\(("0" + .m)[-2:])") as $time | "| \(.name) | \(.state) | \($time) |"' <<< "$schedules"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          if jq -e '.Status == "NO_CHANGES" or (.Status == "FAILED" and (.StatusReason // "" | test("didn.t contain changes|No updates are to be performed")))' change-set.json > /dev/null; then
+            echo "noop=true" >> "$GITHUB_OUTPUT"
+            echo "### Sin cambios en el stack: no hay change set que ejecutar" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "noop=false" >> "$GITHUB_OUTPUT"
 
           # Guardas: el stack de la API nunca toca IAM ni reemplaza o elimina la tabla.
           jq -e '.Status == "CREATE_COMPLETE" and .ExecutionStatus == "AVAILABLE"' change-set.json
@@ -127,14 +138,6 @@ jobs:
           echo "changeset=$(jq -r .ChangeSetId change-set.json)" >> "$GITHUB_OUTPUT"
           {
             echo "### Change set \`$change_set\`"
-            echo
-            echo "CORS: \`${CORS_ALLOWED_ORIGINS:-(sin CORS)}\`"
-            echo
-            echo "#### Schedulers (estado sintetizado)"
-            echo
-            echo "| Scheduler | Estado | Hora UTC |"
-            echo "| --- | --- | --- |"
-            jq -r '.[] | (.cron | capture("^cron\\((?<m>[0-9]+) (?<h>[0-9]+) ") | "\(("0" + .h)[-2:]):\(("0" + .m)[-2:])") as $time | "| \(.name) | \(.state) | \($time) |"' <<< "$schedules"
             echo
             echo "#### Recursos"
             echo
@@ -151,6 +154,7 @@ jobs:
 
   execute:
     needs: plan
+    if: github.ref == 'refs/heads/main' && needs.plan.outputs.noop == 'false'
     runs-on: ubuntu-24.04
     environment: production
     timeout-minutes: 15
@@ -184,3 +188,40 @@ jobs:
             --query 'Stacks[0].{Status:StackStatus,Outputs:Outputs}' > result.json
           jq -e '.Status == "CREATE_COMPLETE" or .Status == "UPDATE_COMPLETE"' result.json
           jq -r '.Outputs[] | "- \(.OutputKey): \(.OutputValue)"' result.json >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    needs: [plan, execute]
+    # Tras ejecutar el change set, o tras un plan sin cambios (lo desplegado ya coincide con el código).
+    if: >-
+      always() && github.ref == 'refs/heads/main' && needs.plan.result == 'success' &&
+      (needs.execute.result == 'success' || (needs.execute.result == 'skipped' && needs.plan.outputs.noop == 'true'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Publicar el tag y la release de la versión desplegada
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="v$(jq -r .version package.json)"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "La release $tag ya existe: no se modifica." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Un tag existente se reutiliza solo si apunta al commit desplegado: `--target` no mueve un
+          # tag que ya existe. matching-refs devuelve una lista (vacía si no existe).
+          ref="refs/tags/$tag"
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag" \
+            --jq "map(select(.ref == \"$ref\")) | length")
+          if ((existing > 0)); then
+            tagged=$(gh api "repos/$GITHUB_REPOSITORY/commits/$ref" --jq .sha)
+            [[ "$tagged" == "$GITHUB_SHA" ]] ||
+              { echo "El tag $tag apunta a $tagged, no a $GITHUB_SHA: revisar la versión."; exit 1; }
+          fi
+          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --generate-notes
+          echo "Release $tag publicada sobre $GITHUB_SHA." >> "$GITHUB_STEP_SUMMARY"

@@ -16,14 +16,36 @@ export interface ErrorResponse {
   };
 }
 
-/** Canción tal como la ve el frontend: sin los campos de uso interno. */
-export type PublicTrack = Omit<DailyTrack, 'spotifyArtistId'>;
+/** Campos públicos de una canción. */
+export type PublicTrack = Pick<
+  DailyTrack,
+  | 'date'
+  | 'title'
+  | 'artist'
+  | 'album'
+  | 'releaseYear'
+  | 'spotifyTrackId'
+  | 'spotifyUrl'
+  | 'selectionCriterion'
+  | 'createdAt'
+  | 'coverUrl'
+  | 'description'
+>;
 
-export function toPublicTrack({
-  spotifyArtistId: _internal,
-  ...publicTrack
-}: DailyTrack): PublicTrack {
-  return publicTrack;
+export function toPublicTrack(track: DailyTrack): PublicTrack {
+  return {
+    date: track.date,
+    title: track.title,
+    artist: track.artist,
+    album: track.album,
+    releaseYear: track.releaseYear,
+    spotifyTrackId: track.spotifyTrackId,
+    spotifyUrl: track.spotifyUrl,
+    selectionCriterion: track.selectionCriterion,
+    createdAt: track.createdAt,
+    coverUrl: track.coverUrl,
+    description: track.description,
+  };
 }
 
 /** GET /api/tracks/today y GET /api/tracks/:date */

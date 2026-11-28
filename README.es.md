@@ -1,5 +1,13 @@
 # 365-tracks-api
 
+[![CI](https://img.shields.io/github/actions/workflow/status/matigaleanodev/365-tracks-api/ci.yml?style=flat-square&label=CI)](https://github.com/matigaleanodev/365-tracks-api/actions/workflows/ci.yml)
+![Versión](https://img.shields.io/badge/versi%C3%B3n-1.0.0-blue?style=flat-square)
+![Node.js](https://img.shields.io/badge/Node.js-24-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-6.0-3178C6?style=flat-square&logo=typescript&logoColor=white)
+![AWS Lambda](https://img.shields.io/badge/AWS-Lambda-FF9900?style=flat-square&logo=awslambda&logoColor=white)
+![AWS CDK](https://img.shields.io/badge/AWS_CDK-2-FF9900?style=flat-square&logo=amazonwebservices&logoColor=white)
+![DynamoDB](https://img.shields.io/badge/DynamoDB-4053D6?style=flat-square&logo=amazondynamodb&logoColor=white)
+
 Backend serverless de **365 Tracks**: una app pública que publica una canción por día, la misma para todos.
 
 [English](README.md)

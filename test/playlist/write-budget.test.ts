@@ -65,7 +65,7 @@ function setup(options: { days?: number; existingPlaylist?: boolean } = {}) {
     if (req.path === '/me') return new Response(JSON.stringify({ id: 'owner' }));
     if (req.path === '/me/playlists') {
       const items = playlistExists
-        ? [{ id: PLAYLIST_ID, name: '365 Tracks 2027', owner: { id: 'owner' } }]
+        ? [{ id: PLAYLIST_ID, name: 'Daywave 2027', owner: { id: 'owner' } }]
         : [];
       return new Response(JSON.stringify({ items, total: items.length, next: null }));
     }
@@ -353,9 +353,7 @@ describe('contenido de las entradas validado antes de decidir', () => {
     ctx.hooks.override = (req) =>
       req.method === 'GET' && req.path === '/me/playlists'
         ? new Response(
-            JSON.stringify(
-              items([{ id: 'corto', name: '365 Tracks 2027', owner: { id: 'owner' } }]),
-            ),
+            JSON.stringify(items([{ id: 'corto', name: 'Daywave 2027', owner: { id: 'owner' } }])),
           )
         : undefined;
 

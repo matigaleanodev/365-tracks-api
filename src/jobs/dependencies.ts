@@ -1,3 +1,4 @@
+import { createRotationPersister } from '../config/spotify-secrets-sync.ts';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { SSMClient } from '@aws-sdk/client-ssm';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
@@ -74,6 +75,11 @@ export async function createPlaylistDependencies(
     PARAMETER_KEYS.spotifyRefreshToken,
   ]);
 
+  const persistRotated = createRotationPersister(
+    store,
+    parameterName(prefix, PARAMETER_KEYS.spotifyRefreshToken),
+    parameters.require(PARAMETER_KEYS.spotifyRefreshToken),
+  );
   const tokens = createRefreshTokenProvider({
     clientId: parameters.require(PARAMETER_KEYS.spotifyClientId),
     clientSecret: parameters.require(PARAMETER_KEYS.spotifyClientSecret),
@@ -81,8 +87,13 @@ export async function createPlaylistDependencies(
     // Única escritura posible fuera de `syncPlaylists`, también en dry-run: guardar en Parameter
     // Store el refresh token que Spotify rotó (descartarlo podría invalidar la autorización).
     // `put` se invoca solo ante rotación; nunca modifica playlists ni registros de sincronización.
-    onRefreshTokenRotated: (token) =>
-      store.put(parameterName(prefix, PARAMETER_KEYS.spotifyRefreshToken), token),
+    // Si otro proceso ya reemplazó el parámetro (sincronización o reautorización), no lo pisa: esta
+    // instancia caliente partió de un token viejo.
+    onRefreshTokenRotated: async (token) => {
+      if (!(await persistRotated(token))) {
+        console.warn(JSON.stringify({ event: 'refresh-token-superseded' }));
+      }
+    },
   });
   const documentClient = DynamoDBDocumentClient.from(new DynamoDBClient({}));
   return {

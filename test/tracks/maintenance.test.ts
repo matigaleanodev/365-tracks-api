@@ -6,6 +6,9 @@ import type { DailyTrack } from '../../src/tracks/types.ts';
 import { fakeDynamo } from '../support/fake-dynamo.ts';
 import { preparedTrack, spotifyId } from '../support/music.ts';
 
+/** Reloj fijo previo al lanzamiento: la baja rechaza fechas que ya empezaron en alguna zona. */
+const BEFORE_LAUNCH = new Date('2026-12-01T00:00:00Z');
+
 /** Catálogo anterior a las transacciones: solo existen los ítems TRACK. */
 function legacy(tracks: DailyTrack[]) {
   const dynamo = fakeDynamo();
@@ -80,7 +83,9 @@ describe('baja de una fecha', () => {
 
   it('una fecha inexistente no hace nada y las reservas de otra fecha no se tocan', async () => {
     const dynamo = fakeDynamo();
-    expect(await removeTrack(dynamo.client, dynamo.table, '2027-01-01')).toBe('not-found');
+    expect(
+      await removeTrack(dynamo.client, dynamo.table, '2027-01-01', { now: BEFORE_LAUNCH }),
+    ).toBe('not-found');
 
     const first = preparedTrack('2027-01-01', 1);
     await dynamo.repository.create(first);
@@ -89,7 +94,7 @@ describe('baja de una fecha', () => {
       pk: 'TRACK',
       ...preparedTrack('2027-09-01', 2, { spotifyTrackId: first.spotifyTrackId, artist: 'Zed' }),
     });
-    await removeTrack(dynamo.client, dynamo.table, '2027-09-01');
+    await removeTrack(dynamo.client, dynamo.table, '2027-09-01', { now: BEFORE_LAUNCH });
     expect(dynamo.items.get(`CLAIM|id#${first.spotifyTrackId}`)?.trackDate).toBe('2027-01-01');
     expect(dynamo.items.has('TRACK|2027-01-01')).toBe(true);
   });
@@ -192,7 +197,7 @@ describe('auditoría de la propia tabla', () => {
     const dynamo = fakeDynamo();
     await dynamo.repository.create(preparedTrack('2027-01-01', 1, { artist: 'Solo' }));
     await dynamo.repository.create(preparedTrack('2027-06-01', 2, { artist: 'Otro' }));
-    await removeTrack(dynamo.client, dynamo.table, '2027-01-01');
+    await removeTrack(dynamo.client, dynamo.table, '2027-01-01', { now: BEFORE_LAUNCH });
     expect(dynamo.items.get('ARTIST|name#solo')?.dates).toEqual([]);
 
     const report = await reindexControlRecords(dynamo.client, dynamo.table, { write: true });

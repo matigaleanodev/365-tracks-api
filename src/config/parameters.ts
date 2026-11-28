@@ -1,10 +1,16 @@
-import { GetParametersCommand, PutParameterCommand, type SSMClient } from '@aws-sdk/client-ssm';
+import {
+  GetParameterHistoryCommand,
+  GetParametersCommand,
+  PutParameterCommand,
+  type SSMClient,
+} from '@aws-sdk/client-ssm';
 
 /** Nombres relativos al prefijo del despliegue (`SSM_PARAMETER_PREFIX`, p. ej. `/tracks365`). */
 export const PARAMETER_KEYS = {
   spotifyClientId: 'spotify/client-id',
   spotifyClientSecret: 'spotify/client-secret',
   spotifyRefreshToken: 'spotify/refresh-token',
+  spotifyRefreshTokenSeed: 'spotify/refresh-token-seed-sha256',
   openaiApiKey: 'openai/api-key',
   openaiModel: 'openai/model',
   criteriaWeights: 'selection/criteria-weights',
@@ -52,6 +58,20 @@ export class SsmParameterStore implements ParameterStore {
       }
     }
     return found;
+  }
+
+  /** Valores anteriores de un parámetro (hasta las últimas cien versiones). Son secretos. */
+  async history(name: string): Promise<string[]> {
+    const values: string[] = [];
+    let NextToken: string | undefined;
+    do {
+      const page = await this.#client.send(
+        new GetParameterHistoryCommand({ Name: name, WithDecryption: true, NextToken }),
+      );
+      for (const { Value } of page.Parameters ?? []) if (Value !== undefined) values.push(Value);
+      NextToken = page.NextToken;
+    } while (NextToken);
+    return values;
   }
 
   async put(name: string, value: string): Promise<void> {

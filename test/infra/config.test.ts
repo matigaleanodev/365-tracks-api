@@ -116,38 +116,46 @@ describe('orígenes CORS', () => {
     expect(origins('')).toEqual([]);
   });
 
-  it('el workflow de despliegue entrega el input a la síntesis', () => {
+  describe('workflow de despliegue', () => {
     const workflow = readFileSync(
       new URL('../../.github/workflows/deploy.yml', import.meta.url),
       'utf8',
     );
-    expect(workflow).toContain('cors_allowed_origins:');
-    expect(workflow).toContain("default: 'http://localhost:4200'");
-    expect(workflow).toContain('CORS_ALLOWED_ORIGINS: ${{ inputs.cors_allowed_origins }}');
-  });
+    const config = JSON.parse(
+      readFileSync(new URL('../../deploy/production.json', import.meta.url), 'utf8'),
+    ) as {
+      corsAllowedOrigins: string[];
+      scheduleEnabled: boolean;
+      playlistScheduleEnabled: boolean;
+    };
 
-  describe('workflow de despliegue: Schedulers', () => {
-    const workflow = readFileSync(
-      new URL('../../.github/workflows/deploy.yml', import.meta.url),
-      'utf8',
-    );
-
-    it.each(['schedule_enabled', 'playlist_schedule_enabled'])(
-      'el input %s es booleano, opcional y false por defecto',
-      (name) => {
-        const block = new RegExp(`^ {6}${name}:\\n(?: {8}.*\\n)+`, 'm').exec(workflow)?.[0];
-        expect(block).toBeDefined();
-        expect(block).toContain('type: boolean');
-        expect(block).toContain('default: false');
-        expect(block).toContain('required: false');
-      },
-    );
-
-    it('pasa ambos estados a CDK como contexto, por entorno y sin interpolar en el script', () => {
-      expect(workflow).toContain('SCHEDULE_ENABLED_INPUT: ${{ inputs.schedule_enabled }}');
-      expect(workflow).toContain(
-        'PLAYLIST_SCHEDULE_ENABLED_INPUT: ${{ inputs.playlist_schedule_enabled }}',
+    it('se dispara al integrar en main y admite ejecución manual sin inputs', () => {
+      expect(workflow).toMatch(
+        /^on:\n {2}push:\n {4}branches: \[main\]\n {2}workflow_dispatch:\n/m,
       );
+      expect(workflow).not.toContain('inputs');
+      expect(workflow).toContain("github.ref == 'refs/heads/main'");
+    });
+
+    it('la configuración versionada es válida y deja apagadas las automatizaciones editoriales', () => {
+      const resolved = resolveStackConfig(
+        (key) =>
+          ({
+            corsAllowedOrigins: config.corsAllowedOrigins.join(','),
+            scheduleEnabled: String(config.scheduleEnabled),
+            playlistScheduleEnabled: String(config.playlistScheduleEnabled),
+          })[key],
+        {},
+      );
+      // Producción solo acepta el dominio público del frontend.
+      expect(resolved.corsAllowedOrigins).toEqual(['https://daywave.matiasgaleano.dev']);
+      // Activarlas es una decisión explícita (cambio revisado en este archivo), no un default.
+      expect(config.scheduleEnabled).toBe(false);
+      expect(config.playlistScheduleEnabled).toBe(false);
+    });
+
+    it('lee CORS y Schedulers del archivo y los pasa a CDK como contexto', () => {
+      expect(workflow).toContain('config=deploy/production.json');
       expect(workflow).toContain('-c "scheduleEnabled=$SCHEDULE_ENABLED_INPUT"');
       expect(workflow).toContain('-c "playlistScheduleEnabled=$PLAYLIST_SCHEDULE_ENABLED_INPUT"');
       expect(workflow).toContain(
@@ -157,13 +165,31 @@ describe('orígenes CORS', () => {
         'unset PUBLISH_TIME_UTC SCHEDULE_ENABLED PLAYLIST_SCHEDULE_ENABLED PLAYLIST_SYNC_TIME_UTC',
       );
       // El estado se verifica antes de crear el change set, y el deploy reutiliza el ensamblado verificado.
+      const read = workflow.indexOf('config=deploy/production.json');
       const synth = workflow.indexOf('npx cdk synth Tracks365ApiStack');
-      const check = workflow.indexOf('no coincide con schedule_enabled');
+      const check = workflow.indexOf('no coincide con scheduleEnabled');
       const deploy = workflow.indexOf('npx cdk deploy Tracks365ApiStack --app cdk.out');
-      expect(synth).toBeGreaterThan(-1);
+      expect(read).toBeGreaterThan(-1);
+      expect(synth).toBeGreaterThan(read);
       expect(check).toBeGreaterThan(synth);
       expect(deploy).toBeGreaterThan(check);
-      expect(workflow.match(/\$\{\{ *inputs\.(schedule|playlist)/g)).toHaveLength(2);
+    });
+
+    it('un plan sin cambios termina en verde y no ejecuta nada', () => {
+      expect(workflow).toContain('echo "noop=true" >> "$GITHUB_OUTPUT"');
+      expect(workflow).toContain(
+        "if: github.ref == 'refs/heads/main' && needs.plan.outputs.noop == 'false'",
+      );
+    });
+
+    it('publica la release solo después de ejecutar el change set y sin pisar una existente', () => {
+      const release = workflow.slice(workflow.indexOf('\n  release:'));
+      expect(release).toContain('needs: [plan, execute]');
+      expect(release).toContain("needs.execute.result == 'success'");
+      expect(release).toContain("needs.plan.outputs.noop == 'true'");
+      expect(release).toContain('contents: write');
+      expect(release).toContain('gh release view "$tag"');
+      expect(release).toContain('--target "$GITHUB_SHA"');
     });
   });
 });
